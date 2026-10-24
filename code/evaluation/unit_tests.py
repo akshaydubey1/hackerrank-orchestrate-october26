@@ -70,7 +70,38 @@ def _investigation_cases():
     return out
 
 
-GROUPS = [("U1 U2 U3 U8", _planner_cases, 4), ("U4 U5 U6 U7", _investigation_cases, 4)]
+def _row_gap_cases():
+    from ghost_audit import investigate as inv
+    out = []
+    # U9/U10/U11 row-gap problems: the screen's declared record count is the label
+    from types import SimpleNamespace
+    base = "Events  Updated moments ago - 3 records\nuser_9 Valid audit_record_1\nuser_9 Valid audit_record_3\n"
+    store = SimpleNamespace(files={"img": SimpleNamespace(path=Path("x.png"), text=base, captured_at="2026-01-01T00:00:00Z",
+                                                          verified_identifiers=set(), investigations=[], n_observations=0)},
+                            observations=[])
+    gaps = inv.find_row_gaps(store)
+    saved = inv._reextract
+    try:
+        inv._reextract = lambda p, a, c: ("3 records\nuser_9 Valid audit_record_2\n", True)
+        ok = inv.investigate(gaps, inv.FixedLadder())
+        inv._reextract = lambda p, a, c: ("user_9 audit_record_2\nuser_9 audit_record_7\n", True)
+        over = inv.investigate(gaps, inv.FixedLadder())
+    finally:
+        inv._reextract = saved
+    out.append(("U9 row gap: re-read completing the declared count is accepted",
+                len(gaps) == 1 and ok[0].verified and ok[0].new_ids == ["audit_record_2"],
+                f"gaps={len(gaps)}, verified={ok[0].verified if ok else None}"))
+    out.append(("U10 row gap: re-read exceeding the declared count is rejected", over and not over[0].verified,
+                f"verified={over[0].verified if over else None}, attempts={len(over[0].attempts) if over else 0}"))
+    inv.apply(store, ok)
+    new_obs = [o for o in store.observations if o.resource_id == "audit_record_2"]
+    out.append(("U11 row gap: accepted row becomes an ordinary observation from its own line",
+                len(new_obs) == 1 and "user_9" in new_obs[0].identifiers and new_obs[0].location.startswith("re-extraction"),
+                f"{[(o.resource_id, o.identifiers, o.location) for o in new_obs]}"))
+    return out
+
+
+GROUPS = [("U1 U2 U3 U8", _planner_cases, 4), ("U4 U5 U6 U7", _investigation_cases, 4), ("U9 U10 U11", _row_gap_cases, 3)]
 
 
 def run(code_dir=None) -> list:

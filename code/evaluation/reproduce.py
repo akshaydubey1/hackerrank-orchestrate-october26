@@ -11,7 +11,8 @@ Steps
      failfirst.py on this code ; investigate_cases.py -> evaluation/case_investigation.md
   4. evaluation/main.py                -> code/evaluation/evaluation_report.md
   5. evaluation/make_usage_report.py   -> code/evaluation/usage_report.md
-  6. evaluation/acceptance.py          -> code/evaluation/acceptance_report.md (exit status = gate)
+  6. evaluation/gate_tests.py          -> code/runs/gate_tests.json (self-tests of the gate)
+  7. evaluation/acceptance.py --mode release -> code/evaluation/acceptance_report.md (both gate results)
 Step 3 needs a git checkout (it reads the baseline revision from git); it is skipped otherwise and
 the report then marks the before/after and fail-first sections NOT RUN.
 """
@@ -74,7 +75,8 @@ def main(argv=None):
     cmd = [py, HERE / "main.py"] + (["--quick"] if a.quick else [])
     sh(*cmd)
     sh(py, HERE / "make_usage_report.py")
-    sh(py, HERE / "acceptance.py", "--out", HERE / "acceptance_report.md", check=False)
+    sh(py, HERE / "gate_tests.py", check=False)
+    sh(py, HERE / "acceptance.py", "--mode", "release", "--out", HERE / "acceptance_report.md", check=False)
 
 
 if __name__ == "__main__":

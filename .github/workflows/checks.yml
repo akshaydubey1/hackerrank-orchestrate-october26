@@ -9,7 +9,7 @@ permissions:
 
 env:
   BASELINE_REV: f280a63
-  PREVIOUS_REV: 3be6cb1
+  PREVIOUS_REV: a3633c9
 
 jobs:
   execute:
@@ -54,28 +54,54 @@ jobs:
             code/runs/invariance/invariance.json
             code/runs/compare_*.json
             code/runs/failfirst/*.json
+            code/runs/invariance/traces/full.manifest.json
+            code/runs/gate_tests.json
             code/evaluation/evaluation_report.md
             code/evaluation/acceptance_report.md
             code/evaluation/case_investigation.md
             code/evaluation/usage_report.md
 
-  acceptance:
-    name: correctness acceptance (FAIL blocks; EXCEPTIONs listed with rationale)
+  regression-gate:
+    name: regression gate (dev mode; fails on unexpected change, stale or incomplete results)
     needs: evaluate
     if: always()
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r code/requirements.txt
       - uses: actions/download-artifact@v4
         with:
           name: evaluation
           path: artifact
+      # upload-artifact strips the common prefix "code/" from the uploaded paths
+      - name: Regression gate
+        run: |
+          python code/evaluation/acceptance.py --mode dev \
+            --results artifact/runs/evaluation_results.json \
+            --invariance artifact/runs/invariance/invariance.json \
+            --gate-tests artifact/runs/gate_tests.json
+
+  release-gate:
+    name: release gate (strict; BLOCKED while semantic exceptions or missing evaluations remain)
+    needs: evaluate
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      # upload-artifact strips the common prefix "code/" from the uploaded paths
-      - name: Acceptance gate (writes the job summary)
+      - run: python -m pip install -r code/requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: evaluation
+          path: artifact
+      - name: Release gate (expected to fail until every blocker is resolved)
         run: |
-          python code/evaluation/acceptance.py \
+          python code/evaluation/acceptance.py --mode release \
             --results artifact/runs/evaluation_results.json \
-            --invariance artifact/runs/invariance/invariance.json
+            --invariance artifact/runs/invariance/invariance.json \
+            --gate-tests artifact/runs/gate_tests.json

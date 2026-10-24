@@ -196,7 +196,9 @@ def render(uncertified, complete_no_acct, mism) -> str:
     L += ["## 1. Uncertified cases in the 518-case output", "",
           f"**{len(uncertified)} cases** have no supported violation and at least one unproven required state; each is "
           "serialised as INCOMPLETE carrying only future verification checks.", "",
-          "| Blocking reason | Cases |", "|---|---|"] + [f"| {k} | {v} |" for k, v in reason_counts.most_common()]
+          f"Blocking-reason assignments ({sum(reason_counts.values())} for {len(uncertified)} unique cases; a case can "
+          "have several):", "",
+          "| Blocking reason | Cases with this reason |", "|---|---|"] + [f"| {k} | {v} |" for k, v in reason_counts.most_common()]
     L += ["", "Every workflow candidate account of these cases, classified by searching all evidence:", "",
           "| Candidate classification | Candidates |", "|---|---|"] + [f"| {k} | {v} |" for k, v in cls_counts.most_common()]
     L += ["", "| Case | Subject | Identifiers | Linked resources | Account basis | Candidates (state; where linked) | Blocking reason |",

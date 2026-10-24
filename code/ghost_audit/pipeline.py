@@ -31,7 +31,7 @@ class Engine:
         # bounded investigation of OCR identifier misreads (deterministic ladder unless a model is enabled)
         from . import investigate
         known = {e for p in self.identity.people.values() for e in p.emails}
-        problems = investigate.find_problems(self.store, known)
+        problems = investigate.find_problems(self.store, known) + investigate.find_row_gaps(self.store)
         self.investigation = investigate.investigate(problems, investigate.policy_from_env(),
                                                      (cache_dir / "investigate") if cache_dir else None)
         investigate.apply(self.store, self.investigation)

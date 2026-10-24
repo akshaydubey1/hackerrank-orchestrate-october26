@@ -116,7 +116,7 @@ class Verifier:
         if not p.exists():
             self._text[fid] = ""
             return ""
-        key = hashlib.sha256(p.read_bytes()).hexdigest()[:24] + "_verifier_v1.txt"
+        key = hashlib.sha256(p.read_bytes()).hexdigest()[:24] + "_verifier_v2.txt"
         c = self.cache_dir / key
         if c.exists():
             t = c.read_text(encoding="utf-8")
@@ -124,7 +124,21 @@ class Verifier:
             t = subprocess.run(["pdftotext", "-layout", str(p), "-"], capture_output=True, text=True).stdout
             c.write_text(t, encoding="utf-8")
         elif p.suffix == ".png":
+            # two independent readings: the default pass and the verifier's own x2-upscaled, uniform-block pass
+            # (small table rows are dropped by the default pass alone); only the Tesseract binary is shared
             t = subprocess.run(["tesseract", str(p), "-"], capture_output=True, text=True).stdout
+            try:
+                from PIL import Image
+                import tempfile as _tf
+                im = Image.open(p).convert("L")
+                im = im.resize((im.width * 2, im.height * 2))
+                with _tf.TemporaryDirectory() as td:
+                    q = Path(td) / "v.png"
+                    im.save(q)
+                    t2 = subprocess.run(["tesseract", str(q), "-", "--psm", "6"], capture_output=True, text=True).stdout
+                t = t + "\n----- verifier second reading (x2, psm 6) -----\n" + t2
+            except (OSError, ImportError):
+                pass
             c.write_text(t, encoding="utf-8")
         else:
             t = p.read_text(encoding="utf-8", errors="replace")
@@ -157,8 +171,12 @@ class Verifier:
                     if depth <= 0 and k > j:
                         break
                 ctx = "\n".join(lines[j:k + 1])
-            elif self.files[fid]["file_path"].endswith((".png", ".pdf")):
+            elif self.files[fid]["file_path"].endswith(".pdf"):
                 ctx = "\n".join(lines)
+            elif self.files[fid]["file_path"].endswith(".png"):
+                # a screen row asserts ownership on its own line; a page-level subject filter applies to all
+                # rows. Other text on the page (detail panels, other rows) is not this row's context.
+                ctx = "\n".join([line] + [l for l in lines if re.search(r"subject filter", l, re.I)])
             out.append(ctx)
         return out
 

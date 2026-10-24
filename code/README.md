@@ -35,15 +35,20 @@ Regenerate every artifact in one go (predictions with fresh extraction, request-
 before/after comparison against a previous git revision, fail-first evidence, both reports):
 
 ```bash
-python3 code/evaluation/reproduce.py --baseline f280a63 --previous 3be6cb1   # needs a git checkout
+python3 code/evaluation/reproduce.py --baseline f280a63 --previous a3633c9   # needs a git checkout
 python3 code/evaluation/reproduce.py                      # from an extracted code.zip (baseline sections NOT RUN)
 ```
 
 `code/evaluation/main.py` reads `code/runs/invariance/invariance.json`, `code/runs/compare_{base,prev}.json` and
 `code/runs/failfirst/*.json` when they exist; a section whose input is missing is reported as NOT RUN.
-`code/evaluation/acceptance.py` turns the results into `acceptance_report.md` (PASS / FAIL / EXCEPTION / NOT RUN
-per check, verdicts per area; exit status 1 on any FAIL); recorded exceptions with rationale and exact case
-lists live in `code/evaluation/known_exceptions.json`. `code/evaluation/investigate_cases.py` writes the case-level
+`code/evaluation/acceptance.py` turns the results into `acceptance_report.md` with two gates:
+`--mode dev` (regression gate: fails on any unexpected change, stale or foreign results, empty or malformed suites,
+missing test identities) and `--mode release` (strict: additionally fails on any recorded exception or NOT RUN in
+the required areas). Recorded exceptions with rationale and exact case lists live in
+`code/evaluation/known_exceptions.json`; an exception documents uncertainty and never establishes correctness.
+`code/evaluation/gate_tests.py` tests the gate itself (empty lists, omitted suites, stale fingerprints, malformed
+files, missing identities). Raw-evidence reviews of six unresolved cases and the organiser message draft are in
+`code/evaluation/case_reviews.md`. `code/evaluation/investigate_cases.py` writes the case-level
 evidence matrix and conflict reproductions to `case_investigation.md`. CI (`.github/workflows/checks.yml`) runs the
 execution job, the full reproduction and the acceptance gate.
 
@@ -83,7 +88,8 @@ code/
     unit_tests.py            certification and investigation unit checks (runnable against any code tree)
     agent_eval.py            labelled evaluation of the investigation step vs the deterministic baseline
     investigate_cases.py     case-level evidence matrix and specification-conflict reproductions
-    acceptance.py            correctness gate (PASS / FAIL / EXCEPTION / NOT RUN) -> acceptance_report.md
+    acceptance.py            regression gate (--mode dev) and strict release gate (--mode release)
+    gate_tests.py            self-tests of the acceptance gate
   prompts/intent_fallback.md
 ```
 
@@ -130,9 +136,11 @@ code/
    observed. A missing account id is not proof of absence; absent candidates in an ambiguous window are not proof
    about the subject. Otherwise the case is UNCERTIFIED and serialised as `INCOMPLETE` with only the future
    verification checks (empty `evidence_id`, no invented findings); every blocking reason is in the trace.
-7. **Bounded investigation (`ghost_audit/investigate.py`).** When a screenshot's OCR token is a near-miss of exactly
-   one known identifier, a policy chooses deterministic re-extractions (re-OCR at ×2/×3, other page-segmentation
-   modes, binarisation) within a budget; the identifier counts only if read verbatim. The default policy is a fixed
+7. **Bounded investigation (`ghost_audit/investigate.py`).** Two problem types: a screenshot's OCR token is a
+   near-miss of exactly one known identifier, or a screen's declared record count exceeds the row ids extracted.
+   A policy chooses deterministic re-extractions (re-OCR at ×2/×3, other page-segmentation
+   modes, binarisation) within a budget; an identifier counts only if read verbatim, recovered rows only if they complete
+   the declared count exactly (they are then parsed from their own line by the ordinary document parser). The default policy is a fixed
    ladder; a model policy (`GHOST_AUDIT_INVESTIGATOR=model` plus `ANTHROPIC_API_KEY`) chooses the next tool, but it has
    not been run against a real provider. Policies cannot accept or edit facts, read other files, or change temporal
    filtering, policy rules or serialisation.

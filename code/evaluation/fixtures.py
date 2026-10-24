@@ -83,6 +83,7 @@ USERS = [
     ("user_9031", "Rafa Quint", "rafa.quint@example.org", "+34 600 555 1212"),
     ("user_9032", "Selin Avci", "selin.avci@example.org", "+90 532 555 1313"),
     ("user_9033", "Tariq Noor", "tariq.noor@example.org", "+92 300 555 1414"),
+    ("user_9034", "Uma Reyes", "uma.reyes@example.org", "+52 55 5555 1515"),
     ("user_9029", "Pia Sund", "pia.sund@example.org", "+47 412 55 111"),
 ]
 AUDIT = [
@@ -437,6 +438,19 @@ COMMIT;
     add_req("fx_backup_row_restorable", "tariq.noor@example.org")
     expect["fx_backup_row_restorable"] = {"status": "INCOMPLETE", "must_include": [
         step(F, "backup_service", "backup_9233", "REPORT_RESTORE_RISK", "fx_ev_36")]}
+    # R14 a screen declares 3 records; the default OCR pass misses the small middle row. The screen's own
+    # count is the independent label: all three retained records must be verified, citing the screen.
+    add_file("fx_ev_39", "evidence/images/fx_row_gap.png", "fx_console", "2026-06-09T12:00:00Z", _png_rows([
+        ("Security events   Updated moments ago - 3 records", 28, (0, 0, 0)),
+        ("1  Password changed   user_9034   Valid   audit_record_9341", 28, (0, 0, 0)),
+        ("2  Session revoked   user_9034   Valid   audit_record_9342", 10, (90, 90, 90)),
+        ("3  Login new device   user_9034   Valid   audit_record_9343", 28, (0, 0, 0))]))
+    add_file("fx_ev_40", "evidence/logs/fx_row_gap_account.log", "fx_observability", "2026-06-09T12:00:00Z",
+             "2026-06-09T09:40:00Z level=INFO service=account_service trace_id=tr-910090 resource_id=account_9234 "
+             "event=profile_lookup_completed rows=0 http_status=404 correlation_key=\"uma.reyes@example.org\"\n")
+    add_req("fx_ocr_row_gap", "uma.reyes@example.org")
+    expect["fx_ocr_row_gap"] = {"status": "COMPLETE", "must_include": [
+        step(V, "security_service", "audit_record_9342", "VERIFY_RECORD_PRESENT", "fx_ev_39")]}
     # R12 no account record is known for the subject: absence of an id is not proof of absence
     add_file("fx_ev_37", "evidence/logs/fx_only_security.log", "fx_observability", "2026-06-09T12:00:00Z",
              "2026-06-09T09:00:00Z level=INFO service=security_service trace_id=tr-910080 resource_id=audit_record_9231 "
@@ -541,6 +555,26 @@ def _pdf(lines) -> bytes:
         c.drawString(60, y, line)
         y -= 24
     c.save()
+    return buf.getvalue()
+
+
+def _png_rows(rows) -> bytes:
+    """rows: [(text, font_size, rgb)] — lets a case mix legible and small, low-contrast rows."""
+    import io
+    from PIL import Image, ImageDraw, ImageFont
+    img = Image.new("RGB", (1400, 110 + 80 * len(rows)), "white")
+    d = ImageDraw.Draw(img)
+    for i, (text, size, rgb) in enumerate(rows):
+        font = None
+        for f in ("/usr/share/fonts/opentype/inter/Inter-Regular.otf", "DejaVuSans.ttf") if size < 20 else ("DejaVuSans.ttf",):
+            try:
+                font = ImageFont.truetype(f, size)
+                break
+            except OSError:
+                continue
+        d.text((40, 30 + 80 * i), text, fill=rgb, font=font or ImageFont.load_default())
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
     return buf.getvalue()
 
 

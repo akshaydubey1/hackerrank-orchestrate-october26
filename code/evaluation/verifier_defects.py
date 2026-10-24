@@ -99,13 +99,25 @@ def build_defects(gold: dict, verifier) -> list:
                     + [s for s in others if s["phase"] == "VERIFICATION"])
     out.append(("record treated before flow disabled", "case_11", (st, steps), (st, bad),
                 "recreation_path_after_record_treatment"))
+    # D14 another subject's connector on the same screen: the subject's own flow must be demanded (defective
+    # row omits it), but a row naming someone else must not be (clean row is not flagged). Hand-written rows.
+    f, r, v = "FINDING", "REMEDIATION", "VERIFICATION"
+    clean = [{"step_no": 1, "phase": f, "system_id": "integration_service", "resource_id": "data_flow_1121",
+              "operation": "REPORT_ACTIVE_DATA_FLOW", "state": "ACTIVE", "evidence_id": "evidence_14"},
+             {"step_no": 2, "phase": r, "system_id": "integration_service", "resource_id": "data_flow_1121",
+              "operation": "DISABLE_DATA_FLOW", "state": "DISABLED", "evidence_id": ""},
+             {"step_no": 3, "phase": v, "system_id": "integration_service", "resource_id": "data_flow_1121",
+              "operation": "VERIFY_DATA_FLOW_DISABLED", "state": "DISABLED", "evidence_id": ""}]
+    out.append(("other subject's flow on the same screen is not demanded; own flow is", "case_39",
+                ("INCOMPLETE", clean), ("COMPLETE", []), "missing_recreation_risk"))
     return out
 
 
 def run(dataset: Path, verifier) -> list:
     gold = {r["case_id"]: (r["deletion_status"], json.loads(r["steps_json"]))
             for r in csv.DictReader(open(dataset / "sample_output.csv", encoding="utf-8"))}
-    reqs = {r["case_id"]: r for r in csv.DictReader(open(dataset / "sample_deletion_requests.csv", encoding="utf-8"))}
+    reqs = {r["case_id"]: r for f in ("sample_deletion_requests.csv", "deletion_requests.csv")
+            for r in csv.DictReader(open(dataset / f, encoding="utf-8"))}
     results = []
     for name, cid, clean, bad, expected in build_defects(gold, verifier):
         def flagged(row):

@@ -655,3 +655,126 @@ branch=feature/correctness-repair
 repo_root=/home/claude/hackerrank-orchestrate-october26
 worktree=main
 parent_agent=none
+
+## [2026-10-24T22:24:26Z] Raw-evidence case reviews, row-gap repair, strict release gate
+
+User Prompt (verbatim, secrets redacted):
+[message: attachment 7bee58a4-attachment.txt; its text follows]
+**The reporting is now more honest, but the next step should focus on resolving answers—not adding more tests or exceptions.**
+
+I verified that [PR #1](https://github.com/akshaydubey1/hackerrank-orchestrate-october26/pull/1) remains a draft at `a3633c9`. The committed [acceptance report](https://github.com/akshaydubey1/hackerrank-orchestrate-october26/blob/a3633c9/code/evaluation/acceptance_report.md) correctly distinguishes reproducibility from unresolved correctness.
+
+Three points deserve attention:
+
+- **A passing gate is not release approval.** [`acceptance.py`](https://github.com/akshaydubey1/hackerrank-orchestrate-october26/blob/a3633c9/code/evaluation/acceptance.py) deliberately returns success with exceptions and checks marked `NOT RUN`. It also accepts empty test-result lists as passing. Separate development regression checks from a strict release gate.
+- **Classifying a mismatch does not prove the evidence is unavailable.** The gate checks whether the cause label starts with certain words. That validates bookkeeping, not the claim that no admissible relationship exists.
+- **The OCR improvement is limited evidence.** The committed report shows 11/40 true identifiers verified versus 8/40 without investigation, with 0/20 decoys accepted. That supports a measured improvement—not broad extraction reliability.
+
+Also, report **71 unique uncertified cases with 72 reason assignments**: `case_55` appears under both missing-account and unknown-restore reasons. This avoids the denominator confusion highlighted in your feedback.
+
+Use this next:
+
+Continue work on feature/correctness-repair in:
+https://github.com/akshaydubey1/hackerrank-orchestrate-october26
+
+Focus this pass on resolving uncertain answers and demonstrating useful agent behavior. Preserve existing correctness safeguards. Avoid further broad refactoring, expanding exception lists, or adding tests that merely confirm the implementation’s assumptions.
+
+1. Establish a fixed baseline.
+
+Record the current revision, predictions, metrics, unresolved case set, and configuration. Preserve these for controlled comparisons.
+
+Report unique cases separately from overlapping reasons. Define every metric and denominator consistently across reports and interview material.
+
+2. Reopen the strongest unresolved cases from raw evidence.
+
+Select a small, diverse set covering:
+- An ambiguous account.
+- An anonymized analytics record.
+- A media-only identity link.
+- A retained record.
+- An unknown restore path.
+- A claimed sample/specification conflict.
+
+Inspect original files directly, including rendered screenshots/PDF pages, SQL schemas and rows, structured metadata, trace/correlation identifiers, and cross-system resource relationships.
+
+Do not rely exclusively on the predictor’s or verifier’s extracted text. A parser shared assumption can hide evidence from both.
+
+For each case, record the evidence examined, supported relationships, rejected alternatives, and remaining uncertainty. Do not use numerical identifier patterns, request order, or arbitrary proximity as ownership proof.
+
+Only generalize a repair after demonstrating a valid mechanism on the concrete case.
+
+3. Resolve specification ambiguity through a concise clarification request.
+
+Prepare one ready-to-send organizer message containing the smallest reproducible examples for:
+- File capture time versus embedded event time.
+- Required output when neither completion nor a violation is provable.
+- Apparently unsupported sample resource/identity links.
+
+State what was searched and ask where the supporting evidence can be found. Do not assert that the dataset is defective merely because our implementation cannot resolve it.
+
+Do not send the message without authorization. Continue independent evidence work while clarification is pending.
+
+4. Demonstrate the model-driven investigation path.
+
+If a provider is configured, execute the actual model policy on independently labeled ambiguous cases. Have it select bounded investigation actions; validate all extracted claims and keep policy, temporal enforcement, and serialization deterministic.
+
+Compare the same cases under:
+- Baseline extraction.
+- Deterministic investigation.
+- Model-driven investigation.
+
+Report recovered evidence, false associations, changed decisions, unresolved cases, latency, calls, tokens, and costs.
+
+Do not add model calls that have no useful effect. If credentials are unavailable, provide the exact environment-variable setup and execution command without requesting secrets in chat. Mark real-provider validation NOT RUN.
+
+5. Separate regression stability from release readiness.
+
+Keep a development gate that detects unexpected changes.
+
+Add a distinct strict release mode that fails when required evaluations are missing, empty, malformed, stale, or from a different code/input/configuration fingerprint. Required semantic blockers must prevent release approval.
+
+Validate expected test identities and coverage, not merely whether all supplied entries are true. Test empty lists, omitted suites, stale results, and mismatched fingerprints.
+
+A classified exception may document uncertainty but must not establish correctness. A missing cause label and a genuinely unresolved evidence gap are different issues.
+
+6. Make one evidence-driven improvement cycle.
+
+For each verified defect:
+- Capture the exact mismatch.
+- Add an independently justified failing test.
+- Fix the underlying mechanism.
+- Rerun affected tests and compare against the fixed baseline.
+- Explain every changed prediction and new false positive.
+
+Do not lower recorded acceptance expectations simply to obtain green checks. Preserve strict cutoff behavior unless authoritative clarification supports a change.
+
+7. Deliver an accurate outcome.
+
+Update reports and artifacts only after the final evaluation. Commit and push verified changes under my verified Git identity, keep PR #1 in draft while critical issues remain, and verify remote CI.
+
+Finish with:
+- Cases resolved through newly established evidence.
+- Cases still unresolved and why.
+- Controlled model-comparison results or NOT RUN.
+- Separate regression and release verdicts.
+- The organizer clarification draft.
+- Updated commit and artifact references.
+
+Do not submit to HackerRank or claim that reproducibility proves correctness.
+
+Agent Response Summary:
+Froze the a3633c9 baseline (71 unique uncertified cases, 72 reason assignments; case_55 has two) and reopened six cases from the raw files. One review (case_45) found a genuine extraction omission shared by predictor and verifier: the default OCR pass drops audit_record_002 from a screen that declares 6 records. It is fixed by a row-gap problem type in the bounded investigation step (accept only when the declared count is completed), with fail-first tests; the verifier got its own second reading and a narrower screen-row context, which removed a false alarm it raised for case_39. The other five cases remain unresolved with documented evidence (no admissible links; case_04's subject appears in no evidence file). Added a strict release gate distinct from the regression gate, with self-tests; the release gate is BLOCKED by 5 semantic exceptions. The model policy remains NOT RUN (no credentials). The organiser message is drafted in case_reviews.md and not sent.
+
+Actions:
+* raw inspection of evidence_92, evidence_94, evidence_37, evidence_32, evidence_14, evidence_54/56 and activity rows; rasterised OCR of all PDFs and re-OCR of all screenshots
+* edited code/ghost_audit/{investigate,pipeline}.py; code/evaluation/{verifier,verifier_defects,acceptance,agent_eval,fixtures,unit_tests,main,report,compare,reproduce,investigate_cases}.py; added gate_tests.py, case_reviews.md; CI split into regression and release gates
+* python3 code/evaluation/reproduce.py --baseline f280a63 --previous a3633c9; acceptance.py --mode dev / --mode release
+* commit and push to feature/correctness-repair (PR #1 kept in draft)
+
+Context:
+tool=Claude (claude.ai app agent workspace)
+model=claude-opus-5-5
+branch=feature/correctness-repair
+repo_root=/home/claude/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none

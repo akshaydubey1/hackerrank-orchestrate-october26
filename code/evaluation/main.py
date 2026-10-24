@@ -768,7 +768,21 @@ def mutations():
         from ghost_audit import investigate as inv
         return patched(inv, "verbatim", lambda hypothesis, text: True)
 
+    def m_partial_rows():
+        from ghost_audit import investigate as inv
+        orig = inv._accept
+
+        def acc(pb, text):
+            ok, new = orig(pb, text)
+            if pb.kind == "row_gap" and not ok:
+                from ghost_audit.util import RESOURCE_RE
+                new = sorted({m.group(0) for m in RESOURCE_RE.finditer(text.lower())} - set(pb.known_ids))
+                return bool(new), new
+            return ok, new
+        return patched(inv, "_accept", acc)
+
     return [("accept investigation hypothesis without verbatim read", m_unvalidated_investigation, False),
+            ("accept recovered rows without completing the declared count", m_partial_rows, False),
             ("ignore historical identifiers", m_hist, False), ("guess ambiguous account (nearest time)", m_guess_account, False), ("trust reported_status", m_trust, False),
             ("skip images (no OCR)", m_images, True), ("accept future evidence", m_future, False),
             ("overlook replicas", m_replicas, False), ("drop hash identifiers", m_hash, False),

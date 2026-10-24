@@ -101,6 +101,22 @@ def render(res: dict, eng) -> str:
          "| Input fingerprints (sha256, first 16 hex) | " + ", ".join(f"`{k}` {v}" for k, v in env.get("inputs_sha256", {}).items()) + " |",
          ""]
 
+    ic0 = res.get("internal", {})
+    unc_cases = [c for c, v in ic0.items() if v["internal"] == "UNCERTIFIED"]
+    n_assign = sum(len(v["blocking"]) for c, v in ic0.items() if v["internal"] == "UNCERTIFIED")
+    multi = sorted(c for c in unc_cases if len(ic0[c]["blocking"]) > 1)
+    L += ["## Metric definitions (used identically in every report)", "",
+          "| Metric | Definition | Denominator |", "|---|---|---|",
+          "| Case-level status accuracy | predicted `deletion_status` equals gold | 32 sample cases |",
+          "| Step TP / FP / FN | multiset match of steps on phase, system_id, resource_id, operation, state, evidence_id (step_no excluded) | gold steps (FN), predicted steps (FP) |",
+          "| Step precision / recall / F1 | TP/(TP+FP), TP/(TP+FN), harmonic mean | as above |",
+          "| Row / exact-sequence accuracy | status equal **and** the full ordered step array equal (step_no included through order) | 32 sample cases |",
+          "| Field accuracy | each gold step aligned to the predicted step with the same phase + system + resource; a missing step counts as wrong in every field | gold steps |",
+          "| Citation accuracy | aligned predicted step carries the same evidence_id | gold steps with a non-empty evidence_id |",
+          f"| Uncertified cases | unique cases whose internal state is UNCERTIFIED | {len(unc_cases)} unique cases of 518 |",
+          f"| Uncertified reason assignments | blocking reasons attached to those cases (a case can have several) | {n_assign} assignments; cases with more than one: {multi or 'none'} |",
+          ""]
+
     # ---------------------------------------------------------------- before / after
     def cmp_section(cmp_, label):
         out = []
@@ -122,13 +138,14 @@ def render(res: dict, eng) -> str:
           "batch invariance comes from `invariance.py` run on each code tree.", "",
           "### 1a. Original implementation (f280a63) vs this code", ""]
     L += cmp_section(res.get("compare"), "f280a63")
-    L += ["### 1b. Last reviewed revision (3be6cb1, PR #1 head before this pass) vs this code", ""]
-    L += cmp_section(res.get("compare_prev"), "3be6cb1")
+    prev_rev = (res.get("failfirst") or {}).get("prev_rev", "previous")
+    L += [f"### 1b. Fixed baseline of this pass ({prev_rev}) vs this code", ""]
+    L += cmp_section(res.get("compare_prev"), prev_rev)
     L += ["Reading the tables: sample agreement went **down** on purpose, twice. f280a63 reached 24/32 exact answers "
           "partly by naming resources visible only in files captured after `audit_at` and by assigning accounts by "
-          "queue order. 3be6cb1 still certified COMPLETE when the subject's account was unidentified, or when every "
-          "candidate in an ambiguous workflow window was absent, although neither proves the subject's account "
-          "absent. Section 2 and `case_investigation.md` classify every remaining sample difference.", ""]
+          "queue order; 3be6cb1 still certified COMPLETE without proving the subject's account. Against the fixed "
+          "baseline of this pass every changed prediction is listed above with its cause. Section 2, "
+          "`case_investigation.md` and `case_reviews.md` classify every remaining sample difference.", ""]
 
     # ---------------------------------------------------------------- A. samples
     L += ["## 2. Public samples (32 cases) — sample-tuned, not an estimate of hidden-test accuracy", "",
@@ -200,42 +217,66 @@ def render(res: dict, eng) -> str:
     # ---------------------------------------------------------------- agent capability
     invs = res.get("investigation", {})
     L += ["## 3b. Bounded investigation step (agent capability)", "",
-          "**Problem.** Screenshot OCR sometimes misreads an identifier (dataset: evidence_32 reads `areed1433@gmail.com` "
+          "**Problems.** (1) A screenshot's declared record count exceeds the row ids extracted (dataset: evidence_37 "
+          "declares 6 records; the default OCR pass drops `audit_record_002`, and the verifier's identical pass drops it "
+          "too). (2) Screenshot OCR sometimes misreads an identifier (dataset: evidence_32 reads `areed1433@gmail.com` "
           "as `areedi433` / `areedt433`). The previous code accepted a one-edit look-alike as exposure (fuzzy). That rule "
           "is removed. Instead, when an OCR token is a near-miss of exactly one known identifier, a policy chooses which "
           "deterministic re-extraction to run (re-OCR at ×2/×3 with different page segmentation, optional binarisation) "
-          "under a budget of 3 per problem and 60 per run; a hypothesis is accepted **only** if a re-extraction reads it "
-          "verbatim as a whole token. Policies cannot read other files, accept or edit facts, or touch temporal "
+          "under a budget of 3 per problem and 60 per run. An identifier is accepted **only** if a re-extraction reads it "
+          "verbatim as a whole token; recovered rows **only** if the total then equals the screen's declared count, and "
+          "they are parsed by the ordinary document parser from their own line. Policies cannot read other files, accept or edit facts, or touch temporal "
           "filtering, policy rules or serialisation (unit tests U4–U7, mutant 'accept investigation hypothesis without "
           "verbatim read').", "",
           f"**On the challenge data** (policy `{', '.join(invs.get('policy', []))}`): {invs.get('problems', 0)} problems, "
           f"{invs.get('verified', 0)} verified, {invs.get('actions_run', 0)} re-extractions, {invs.get('model_calls', 0)} model calls.", "",
-          "| File | OCR read | Hypothesis | Actions | Verified |", "|---|---|---|---|---|"]
+          "| File | Default OCR read | Hypothesis / declared | Actions | Verified |", "|---|---|---|---|---|"]
     for o in invs.get("outcomes", []):
-        L.append(f"| {o['problem']['file_id']} | `{o['problem']['observed']}` | `{o['problem']['hypothesis']}` | "
+        hyp = (f"{o['problem']['hypothesis']} records declared; recovered {', '.join(o.get('new_ids') or []) or '—'}"
+               if o['problem'].get('kind') == 'row_gap' else o['problem']['hypothesis'])
+        L.append(f"| {o['problem']['file_id']} | `{o['problem']['observed']}` | {hyp} | "
                  f"{', '.join(a['action'] for a in o['attempts']) or '—'} | {o['verified']} |")
     abl = res.get("investigation_ablation_changed")
-    L += ["", f"Ablation (same run without verified reads): {len(abl) if abl is not None else 'NOT RUN'} of 518 predictions "
-          "change. On this dataset the step replaces an unsafe rule without changing any answer; its value is shown "
-          "on the labelled set below.", ""]
+    L += ["", f"Ablation (same run without the investigation step's results): {len(abl) if abl is not None else 'NOT RUN'} "
+          f"of 518 predictions change ({', '.join(abl) if abl else 'none'}).", ""]
     ae = res.get("agent_eval")
     if ae:
-        L += ["**Labelled evaluation** (`code/evaluation/agent_eval.py`, 60 seeded console-row images, label = the "
-              "address actually drawn; 40 show a known identifier, 20 show a look-alike decoy that must NOT be accepted; "
-              "same images, tools and budgets for every strategy):", "",
-              "| Strategy | Status | Problems found | True identifiers verified (of 40) | Decoys wrongly accepted (of 20) | Re-extractions |",
-              "|---|---|---|---|---|---|"]
-        for r in ae:
+        L += ["**Labelled evaluation** (`code/evaluation/agent_eval.py`; labels are what was actually drawn; every "
+              "strategy uses the same images, tools and budgets and its own cache):", "",
+              "*Identifier misreads* — 60 console rows; 40 show a known identifier, 20 a look-alike decoy that must NOT "
+              "be accepted:", "",
+              "| Strategy | Status | Problems found | True ids verified (of 40) | Decoys accepted (of 20) | Re-extractions | Seconds | Model calls | Tokens | Cost (USD) |",
+              "|---|---|---|---|---|---|---|---|---|---|"]
+        for r in [x for x in ae if x.get("set") != "row_gap"]:
             if r["status"] == "RUN":
-                L.append(f"| {r['strategy']} | RUN | {r['problems_found']} | {r['true_verified']} | "
-                         f"{r['decoys_wrongly_verified']} | {r['re_extractions']} |")
+                L.append(f"| {r['strategy']} | RUN | {r['problems_found']} | {r['true_verified']} | {r['decoys_wrongly_verified']} | "
+                         f"{r['re_extractions']} | {r.get('seconds', '—')} | {r.get('model_calls', 0)} | {r.get('tokens', 0)} | {r.get('cost_usd', 0)} |")
             else:
-                L.append(f"| {r['strategy']} | {r['status']} | — | — | — | — |")
-        L += ["", "The model policy is implemented (`ModelPolicy`, prompt `prompts/investigation_policy.md`, schema-checked "
-              "JSON, timeout, retries, call budget, usage accounting) and tested only with **mock** transports "
-              "(Section 5). It has **not** been executed against a real provider, so no claim is made that it improves "
-              "on the deterministic ladder. Most misreads are not even recognised as near-misses (problem detection, "
-              "not re-extraction, is the bottleneck).", ""]
+                L.append(f"| {r['strategy']} | {r['status']} | — | — | — | — | — | — | — | — |")
+        rg = [x for x in ae if x.get("set") == "row_gap"]
+        if rg:
+            g0 = rg[0]
+            L += ["", f"*Row gaps* — {g0['cases']} screens declaring their record count; {g0['gap_cases']} where the count "
+                  f"matches the rows drawn but one row is small/low-contrast (correct: recover it), {g0['decoy_cases']} where "
+                  "the declared count exceeds the rows drawn (correct: accept nothing, since the count cannot be completed):", "",
+                  "| Strategy | Status | Problems found | Rows missed by default OCR | Rows recovered | False rows accepted | Re-extractions | Seconds | Model calls | Tokens | Cost (USD) |",
+                  "|---|---|---|---|---|---|---|---|---|---|---|"]
+            for r in rg:
+                if r["status"] == "RUN":
+                    L.append(f"| {r['strategy']} | RUN | {r['problems_found']} | {r['rows_missed_by_default_ocr']} | {r['rows_recovered']} | "
+                             f"{r['false_rows_accepted']} | {r['re_extractions']} | {r['seconds']} | {r['model_calls']} | {r['tokens']} | {r['cost_usd']} |")
+                else:
+                    L.append(f"| {r['strategy']} | {r['status']} | — | — | — | — | — | — | — | — | — |")
+        L += ["", "**Model policy: NOT RUN.** It is implemented (`ModelPolicy`, prompt `prompts/investigation_policy.md`, "
+              "schema-checked JSON, timeout, retries, call budget, usage accounting) and exercised only with **mock** "
+              "transports (Section 5). No provider credentials are configured in this environment, so nothing is claimed "
+              "about it. To run the comparison: set `ANTHROPIC_API_KEY` in your own shell (never in a file or chat), "
+              "optionally `GHOST_AUDIT_MODEL`, then `python3 code/evaluation/agent_eval.py --n 60`; to use it in the "
+              "pipeline add `GHOST_AUDIT_INVESTIGATOR=model`.", "",
+              "Reading the results: the deterministic step recovers some misread identifiers and dropped rows without "
+              "accepting any decoy or extra row in these sets. That is a measured improvement on these labelled images, "
+              "not evidence of broad extraction reliability: most identifier misreads are not even recognised as "
+              "near-misses, and the exact-count rule also rejects genuine rows when the declared count cannot be met.", ""]
     else:
         L += ["Labelled evaluation: NOT RUN (`--quick`).", ""]
 
@@ -297,8 +338,8 @@ def render(res: dict, eng) -> str:
           "visible in admissible evidence are planned.", "",
           "**Assumptions shared with the predictor** (a bug in one of these would not be caught): "
           "sha256(lower(email)) hashing; resource-id prefixes name the system (`search_` → search_service); "
-          "the same Tesseract binary; `deletion_rules.csv` as the policy source; the restore-console wording "
-          "`<backup> restored … Completed` read as an operational restore path.", "",
+          "the same Tesseract binary (the verifier adds its own ×2 reading of every screenshot); `deletion_rules.csv` as the "
+          "policy source; the screen-row context rule (a row's own line plus any page-level subject filter).", "",
           f"### Labelled defect fixtures: {sum(x[3] for x in vd)}/{len(vd)} detected", "",
           "Each starts from a gold sample answer, injects one defect, and passes only if the clean row is NOT "
           "flagged and the defective row IS.", "", "| Defect | Case | Expected issue | Result |", "|---|---|---|---|"]
@@ -370,6 +411,10 @@ SPEC = """## 9. Specification conflicts, ambiguities and blockers
 
 The full case-level evidence matrix (every uncertified case, every sample mismatch, every workflow candidate and
 where it occurs in any evidence format) and minimal reproductions are in `code/evaluation/case_investigation.md`.
+Six representative cases were reopened from the raw files (images viewed, PDFs rasterised, JSON/logs/SQL read
+directly); the reviews and the ready-to-send organiser message are in `code/evaluation/case_reviews.md`. One of
+the six (case_45) exposed a genuine extraction omission shared by predictor and verifier, now fixed; the other
+five remain unresolved for the reasons recorded there.
 Summary of the classification there:
 
 | Conflict | Classification | Effect |
@@ -421,18 +466,23 @@ FAILURES = """## 10. Failures found and improvements made (chronological)
 | 18 | **Review of 3be6cb1:** one-edit fuzzy OCR "corroboration" | fuzzy rule in exposure check | replaced by the bounded investigation step with verbatim validation | unit U4–U7, mutant "accept investigation hypothesis without verbatim read", agent_eval decoys |
 | 19 | Report said a fixture had unexplained provenance | the author (this agent) did not check the trace | the session trace shows it was written by this session at 2026-10-24T19:49:41Z; its expectation was re-checked (per-archive `ACTIVE` restore statement, NOT_FOUND account) | `fx_text_handover` |
 | 20 | Mutation harness corrupted static methods; mutants stale after API changes | test tooling | restore raw attribute; mutants rewritten | clean suite run |
+| 21 | **Raw-evidence review (case_45):** evidence_37 declares 6 records, default OCR (predictor and verifier alike) dropped `audit_record_002`; on a synthetic screen the same omission let the old code return COMPLETE while a retained record went unverified | shared default-OCR assumption (ingestion) | row-gap problems in the bounded investigation step: re-extract, accept only when the declared count is completed exactly | `fx_ocr_row_gap`, units U9–U11 |
+| 22 | **Review of a3633c9:** acceptance passed with empty result lists, could not tell stale or foreign results, and one mode served as both regression and release gate | gate design (evaluation) | expected test identities derived from suite source; code/input fingerprint checks; empty and malformed results fail; separate `--mode dev` and `--mode release` | `gate_tests.py` (12 self-tests) |
+| 23 | Verifier missed `audit_record_002` too (same default OCR pass); giving it a second, upscaled reading then raised a false `missing_recreation_risk` for case_39 | the verifier used the whole screen as every row's context, so the subject's e-mail in a detail panel was attributed to another person's connector row | verifier: own ×2 reading of every screenshot; screen-row context = the row's line plus any page-level subject filter (the predictor's rule since fix #3) | verifier defect D14 (fails under the page-wide rule, passes now) |
 """
 
 LIMITATIONS = """## 11. Remaining limitations (honest list)
 
-* **{uncert} uncertified cases** in the 518-case output (Section 9.1): not proven incomplete, not proven complete.
+* **{uncert} unique uncertified cases** in the 518-case output (Section 9.1): not proven incomplete, not proven
+  complete. Reason assignments can exceed the case count (see Metric definitions).
 * **Account attribution** is the dominant blocker; the only admissible way to identify an account is an identifier in
   admissible evidence or the unique workflow submission for the request alone.
 * **Late-captured files are ignored entirely** (C1); if the key uses them, the affected steps are missed by design.
 * **Absence proofs** come only from explicit 404 / NOT_FOUND observations, single-capture JSON collections covering
   the subject and full-table replica dumps; SQL inventories never prove absence.
 * **Restore capability** needs a statement about the specific archive.
-* **OCR** is Tesseract only; most misreads are not recognised as near-misses, so the investigation step resolves few.
+* **OCR** is Tesseract only. The investigation step recovers some misreads and dropped rows on labelled images; most
+  identifier misreads are not recognised as near-misses, and rows are recovered only when a screen states its count.
 * **Intent** is rule-based ({n_notapp} NOT_APPLICABLE in the 518 output). The model fallbacks (intent, investigation
   policy) were **not executed against a real provider**; only mock-transport tests ran.
 * Hidden-test accuracy is unknown; the sample numbers above are fit on the samples, not an estimate.

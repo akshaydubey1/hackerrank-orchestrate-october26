@@ -78,7 +78,11 @@ def explain(before: dict, after: dict, after_trace: dict) -> list:
         key = lambda x: (x["operation"], x["resource_id"])
         removed = {key(x) for x in b[1]} - {key(x) for x in a[1]}
         added = {key(x) for x in a[1]} - {key(x) for x in b[1]}
-        if (b[0] == "NOT_APPLICABLE") != (a[0] == "NOT_APPLICABLE"):
+        reextracted = {x.get("resource") for x in (t.get("trace") or {}).get("resources", [])
+                       if any("re-extraction" in str(bs) for bs in (x.get("state_basis") or []))}
+        if added and {r for _, r in added} <= reextracted and not removed and b[0] == a[0]:
+            cause = "extraction: row recovered by the bounded re-extraction step (declared count completed)"
+        elif (b[0] == "NOT_APPLICABLE") != (a[0] == "NOT_APPLICABLE"):
             cause = "intent: target-aware rules / negation (" + (t.get("intent", {}).get("reason", "")[:60]) + ")"
         elif cid in late:
             cause = "temporal: old answer used a resource or citation not available at audit_at"
