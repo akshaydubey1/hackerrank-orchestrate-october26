@@ -28,6 +28,13 @@ for r in e.run(R):
     for m in x.get('must_include', []): ok = ok and k(m) in {k(s) for s in r.steps}
     for a, b, c in x.get('must_exclude_ops', []): ok = ok and not any(s['system_id'] == a and s['resource_id'] == b and s['operation'] == c for s in r.steps)
     for rid in x.get('must_exclude_resources', []): ok = ok and not any(s['resource_id'] == rid for s in r.steps)
+    for rid in x.get('must_not_cite', []): ok = ok and not any(s['resource_id'] == rid and s['evidence_id'] for s in r.steps)
     if x.get('must_have_unresolved'): ok = ok and any(x['must_have_unresolved'] in json.dumps(u) for u in getattr(r, 'unresolved', []))
     out[r.case_id] = {"pass": ok, "status": r.status, "n_steps": len(r.steps)}
+# unit-level tests (today's file) against the same tree; an error counts as a failure
+import importlib.util
+spec = importlib.util.spec_from_file_location("unit_tests_today", Path(__file__).resolve().parent / "unit_tests.py")
+ut = importlib.util.module_from_spec(spec); spec.loader.exec_module(ut)
+for name, ok, detail in ut.run(code):
+    out[name.split()[0]] = {"pass": ok, "status": "unit", "n_steps": 0, "detail": detail}
 print(json.dumps(out))

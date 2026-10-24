@@ -54,7 +54,7 @@ FLOW_ON = re.compile(r"enabled=(true|1)\b|result=ACTIVE|DATA_FLOW \| ACTIVE|Cont
                      r"'1', '(delivered|stopped)'|,'1','delivered'", re.I)
 FLOW_OFF = re.compile(r"enabled=(false|0)\b|result=DISABLED|DATA_FLOW \| DISABLED|stopped", re.I)
 RESTORE_ON = re.compile(r"restore_allowed=(true|1)\b|eligible=true|result=ACTIVE|BACKUP_ARCHIVE \| ACTIVE|"
-                        r"'1', '20|can still be restored|restored\W{1,4}compl", re.I)
+                        r"'1', '20|can still be restored", re.I)
 RESTORE_OFF = re.compile(r"restore_allowed=(false|0)\b|decision=deny|result=BLOCKED|BACKUP_ARCHIVE \| BLOCKED|"
                          r"'0', '20", re.I)
 

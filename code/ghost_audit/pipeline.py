@@ -28,6 +28,13 @@ class Engine:
         self.dataset_dir = dataset_dir
         self.store = load_evidence(dataset_dir, cache_dir)
         self.identity = IdentityIndex(dataset_dir)
+        # bounded investigation of OCR identifier misreads (deterministic ladder unless a model is enabled)
+        from . import investigate
+        known = {e for p in self.identity.people.values() for e in p.emails}
+        problems = investigate.find_problems(self.store, known)
+        self.investigation = investigate.investigate(problems, investigate.policy_from_env(),
+                                                     (cache_dir / "investigate") if cache_dir else None)
+        investigate.apply(self.store, self.investigation)
         self.activity = ActivityStream(dataset_dir)
         self.policy = Policy(dataset_dir)
         self.auditor = Auditor(self.store, self.identity, self.activity, self.policy)

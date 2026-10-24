@@ -41,20 +41,24 @@ class Treatment:
 
 
 def plan_one(t: Treatment) -> tuple:
-    """Return (finding_op|None, remediation_op|None, verification_op|None, unresolved_reason)."""
+    """Return (finding_op|None, remediation_op|None, verification_op|None, unresolved_reason).
+
+    A resource whose state is unknown still has a required final state: its verification is returned
+    as a check that must pass (future work, never cited) together with the unresolved reason, so an
+    uncertified case is never an empty plan and COMPLETE is never possible while it is unresolved."""
     why = t.unknown_reason or "state not established by admissible evidence"
     if t.category == "DATA_FLOW":
         if t.flow_enabled:
             return "REPORT_ACTIVE_DATA_FLOW", "DISABLE_DATA_FLOW", "VERIFY_DATA_FLOW_DISABLED", ""
         if t.flow_enabled is False or t.exists is False:
             return None, None, "VERIFY_DATA_FLOW_DISABLED", ""
-        return None, None, None, f"flow state unknown: {why}"
+        return None, None, "VERIFY_DATA_FLOW_DISABLED", f"flow state unknown: {why}"
     if t.category == "BACKUP_ARCHIVE":
         if t.restore_allowed:
             return "REPORT_RESTORE_RISK", "BLOCK_RESTORE", "VERIFY_RESTORE_BLOCKED", ""
         if t.restore_allowed is False:
             return None, None, "VERIFY_RESTORE_BLOCKED", ""
-        return None, None, None, f"restore capability unknown: {why}"
+        return None, None, "VERIFY_RESTORE_BLOCKED", f"restore capability unknown: {why}"
     if t.action == "DELETE":
         if t.exists:
             return "REPORT_REMAINING_RECORD", "DELETE_RECORD", "VERIFY_RECORD_ABSENT", ""
@@ -64,7 +68,7 @@ def plan_one(t: Treatment) -> tuple:
             # the primary account always has a required final state; it is planned as future work
             # in an INCOMPLETE case, and stays unresolved (never cited) otherwise
             return None, None, "VERIFY_RECORD_ABSENT", f"account absence unproven: {why}"
-        return None, None, None, f"presence unknown: {why}"
+        return None, None, "VERIFY_RECORD_ABSENT", f"presence unknown: {why}"
     if t.action == "REDACT":
         if t.exists is False:
             return None, None, None, "record to retain-and-redact observed absent"
@@ -72,7 +76,7 @@ def plan_one(t: Treatment) -> tuple:
             return "REPORT_EXPOSED_PII", "REDACT_RECORD", "VERIFY_RECORD_REDACTED", ""
         if t.pii is False:
             return None, None, "VERIFY_RECORD_REDACTED", ""
-        return None, None, None, f"redaction state unknown: {why}"
+        return None, None, "VERIFY_RECORD_REDACTED", f"redaction state unknown: {why}"
     if t.action == "ANONYMIZE":
         if t.exists is False:
             return None, None, "VERIFY_RECORD_ABSENT", ""
@@ -80,14 +84,31 @@ def plan_one(t: Treatment) -> tuple:
             return "REPORT_EXPOSED_PII", "ANONYMIZE_RECORD", "VERIFY_RECORD_ANONYMIZED", ""
         if t.pii is False:
             return None, None, "VERIFY_RECORD_ANONYMIZED", ""
-        return None, None, None, f"anonymisation state unknown: {why}"
+        return None, None, "VERIFY_RECORD_ANONYMIZED", f"anonymisation state unknown: {why}"
     if t.action == "RETAIN":
         if t.exists:
             return None, None, "VERIFY_RECORD_PRESENT", ""
         if t.exists is False:
             return None, None, "VERIFY_RECORD_PRESENT", "RETENTION_VIOLATION: required retained record observed absent"
-        return None, None, None, f"retained record not observed: {why}"
+        return None, None, "VERIFY_RECORD_PRESENT", f"retained record not observed: {why}"
     return None, None, None, f"no action for {t.category}"
+
+
+def _supported(op: str, t: Treatment) -> bool:
+    """A verification is supported when a cited, admissible observation establishes its state."""
+    if not t.evidence_id or t.unknown_reason:
+        return False
+    if op == "VERIFY_DATA_FLOW_DISABLED":
+        return t.flow_enabled is False or t.exists is False
+    if op == "VERIFY_RESTORE_BLOCKED":
+        return t.restore_allowed is False
+    if op == "VERIFY_RECORD_ABSENT":
+        return t.exists is False
+    if op == "VERIFY_RECORD_PRESENT":
+        return t.exists is True
+    if op in ("VERIFY_RECORD_REDACTED", "VERIFY_RECORD_ANONYMIZED"):
+        return t.pii is False and t.exists is not False
+    return False
 
 
 def build_steps(treatments: list, force_uncertified: bool = False) -> tuple:
@@ -110,6 +131,14 @@ def build_steps(treatments: list, force_uncertified: bool = False) -> tuple:
             remediation.append((r, t))
         if v:
             verification.append((v, t))
+    # every required verification must be backed by a cited observation of its state BEFORE any
+    # status is chosen; an unsupported one is an unresolved item, never silently dropped later
+    noted = {u["resource_id"] for u in unresolved}
+    for v, t in verification:
+        if not _supported(v, t) and t.resource_id not in noted:
+            unresolved.append({"resource_id": t.resource_id, "system_id": t.system, "category": t.category,
+                               "reason": f"verification {v} has no supporting citation for the required state"})
+            noted.add(t.resource_id)
     if findings:
         status = "INCOMPLETE"
     elif force_uncertified:
@@ -124,10 +153,8 @@ def build_steps(treatments: list, force_uncertified: bool = False) -> tuple:
     else:
         status = "UNCERTIFIED"
     if status == "COMPLETE":
-        # COMPLETE may only carry evidence-backed verification; everything else is already in
-        # `unresolved` (each unproven item produced a reason above)
-        verification = [(v, t) for v, t in verification if t.evidence_id and not t.unknown_reason
-                         and (t.exists is not None or t.flow_enabled is not None or t.restore_allowed is not None)]
+        # reached only when nothing is unresolved, i.e. every verification passed _supported()
+        assert all(_supported(v, t) for v, t in verification), "COMPLETE with an unsupported verification"
 
     def key(item):
         op, t = item

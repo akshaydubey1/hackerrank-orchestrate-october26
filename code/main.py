@@ -85,6 +85,8 @@ def main(argv=None) -> int:
                            for fid, ef in engine.store.files.items()},
         "extraction_failures": engine.store.failures,
         "file_types": {fid: ef.path.suffix.lower() for fid, ef in engine.store.files.items()},
+        "investigation": {k: v for k, v in __import__("ghost_audit.investigate", fromlist=["summary"])
+                          .summary(engine.investigation).items() if k != "outcomes"},
         "cache": {"hits": engine.store.cache_hits, "misses": engine.store.cache_misses,
                   "enabled": not args.no_cache},
         "n_requests": len(results),

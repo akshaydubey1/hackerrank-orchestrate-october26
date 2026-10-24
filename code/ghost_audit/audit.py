@@ -78,23 +78,6 @@ def _edit_distance(a: str, b: str) -> int:
     return prev[-1]
 
 
-def _ocr_corroborated(email: str, low_text: str) -> bool:
-    """Exposure check for an e-mail that is ALREADY linked to the resource by an exact join.
-
-    Accepts an OCR token that differs by at most one edit in the local part, has the same
-    domain (one edit allowed), and is the only near-miss for that address on the page. It is
-    never used to create a link, so look-alike decoys of other people cannot be merged by it."""
-    local, _, domain = email.partition("@")
-    near = []
-    for tok in re.findall(r"[\w.,%+\-]+@[\w.\-]+", low_text):
-        tl, _, td = tok.partition("@")
-        if _edit_distance(td.replace(",", "."), domain) > 1 or abs(len(tl) - len(local)) > 1:
-            continue
-        if _edit_distance(tl.replace(",", "."), local) <= 1:
-            near.append(tok)
-    return len(set(near)) == 1
-
-
 @dataclass
 class ResourceState:
     system: str
@@ -207,14 +190,13 @@ class Auditor:
                         except ValueError:
                             pass
                 if o.system == "backup_service":
-                    # restore capability needs an affirmative statement; silence is not evidence
-                    if re.search(r"restore (blocked|denied|disabled)|deletion block|legal hold", low):
+                    # restore capability needs an affirmative statement ABOUT THIS ARCHIVE: wording on a
+                    # line that names this backup id. Page-wide text (other archives' restores, banners)
+                    # is not evidence about it; silence is not evidence either.
+                    own = "\n".join(ln for ln in low.splitlines() if o.resource_id in ln)
+                    if re.search(r"restore (blocked|denied|disabled)|deletion block|legal hold", own):
                         o.restore_allowed = False
-                    elif re.search(r"restore (allowed|available|enabled)|restorable|eligible for restore", low):
-                        o.restore_allowed = True
-                    elif re.search(r"\bbackup_\d+ restored\W{1,4}compl", low):
-                        # the same recovery console shows restores of its archives completing: the
-                        # restore path for this archive is operational and nothing on screen blocks it
+                    elif re.search(r"restore (allowed|available|enabled)|restorable|eligible for restore", own):
                         o.restore_allowed = True
                     else:
                         o.restore_allowed = None
@@ -348,7 +330,7 @@ class Auditor:
             if not p:
                 continue
             for e in p.emails:
-                if e in low or _ocr_corroborated(e, low):
+                if e in low or (ef is not None and e in ef.verified_identifiers):
                     hits.append(e)
             if p.name and p.name.lower() in low:
                 hits.append("name")
@@ -557,11 +539,14 @@ class Auditor:
                     active = f["retain_until"] is None or parse_ts(f["retain_until"]) > cut
                     trace.setdefault("register_facts", []).append({**f, "evidence_id": ef.file_id, "active": active})
                     if active:
-                        # the register itself shows the hold is in force (retained); it names no
-                        # resource id, so no step can reference it. Recorded, not blocking.
+                        # A finance retention register row (order, subject, retain-until). It is not a
+                        # supplied legal hold on a system resource and names no resource id, so no policy
+                        # rule or step applies. It is recorded as context; it is NOT taken as proof that
+                        # any record is (or is not) still available.
                         trace.setdefault("register_unresolved", []).append({
-                            "reason": f"active legal hold in register {ef.file_id} (order {f['order_reference']}) "
-                                      "is retained per the register but names no resource id; no step emitted",
+                            "reason": f"finance retention register {ef.file_id} lists order {f['order_reference']} "
+                                      f"for the subject until {f['retain_until'] or 'unspecified'}; no system "
+                                      "resource is named, availability not verified (context only)",
                             "blocking": False})
         pre, info = [], []
         if acct is None and not any(r.startswith("account_") for r in linked):
@@ -575,16 +560,17 @@ class Auditor:
                 cand_states[c] = None if cs is None or cs.unknown_reason else cs.exists
             trace["account_candidate_states"] = cand_states
             if not cands:
-                # no workflow submission and no account linked by any admissible evidence: there is
-                # no known account record to verify (absence of a record id is not proof either way)
-                info.append({"reason": f"no account record known for the subject by audit_at ({how})",
-                             "blocking": False})
-            elif all(x is False for x in cand_states.values()):
-                info.append({"reason": f"primary account not attributable ({how}); every candidate "
-                                       f"{sorted(cands)} is proven absent, so no account step is emitted",
-                             "blocking": False})
+                # no workflow submission and no account linked by any admissible evidence. A missing
+                # identifier is not proof of absence: the account's required state is unproven.
+                pre.append({"reason": f"primary account not identified: no account record known for the "
+                                      f"subject by audit_at ({how})", "candidates": []})
             else:
-                pre.append({"reason": f"primary account not identified ({how})", "candidates": cands})
+                # Candidates absent does not prove the subject's account absent unless evidence shows the
+                # set is exhaustive and contains that account; a report-time window shows neither.
+                pre.append({"reason": f"primary account not identified ({how}); candidate states "
+                                      f"{dict(sorted(cand_states.items()))} do not prove the subject's account "
+                                      "absent (set not shown to be exhaustive or to contain it)",
+                            "candidates": cands})
         internal, steps, unresolved = build_steps(treatments)
         unresolved = pre + trace.get("register_unresolved", []) + unresolved
         if internal == "COMPLETE" and any(u.get("blocking", True) for u in unresolved):

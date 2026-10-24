@@ -24,6 +24,8 @@ class EvidenceFile:
     text: str = ""  # extracted text for PDFs / OCR (kept for audit and identifier search)
     facts: list = field(default_factory=list)  # structured facts without resource ids (e.g. legal register rows)
     warnings: list = field(default_factory=list)
+    verified_identifiers: set = field(default_factory=set)  # exact identifiers confirmed by re-extraction
+    investigations: list = field(default_factory=list)      # investigation outcomes (actions and results)
 
 
 @dataclass

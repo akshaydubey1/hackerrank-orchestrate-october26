@@ -144,6 +144,8 @@ def run_fixtures(cache=False) -> list:
             ok = ok and any(x["must_have_unresolved"] in json.dumps(u) for u in r.unresolved)
         for rid in x.get("must_exclude_resources", []):
             ok = ok and not any(s["resource_id"] == rid for s in r.steps)
+        for rid in x.get("must_not_cite", []):
+            ok = ok and not any(s["resource_id"] == rid and s["evidence_id"] for s in r.steps)
         for sysid, rid, op in x.get("must_exclude_ops", []):
             ok = ok and not any(s["system_id"] == sysid and s["resource_id"] == rid and s["operation"] == op
                                 for s in r.steps)
@@ -530,6 +532,23 @@ def operational_tests(tmp: Path) -> list:
         llm._CACHE.clear()
     out.append(("no API key -> zero model calls in production run", usage_before["calls"] == 0,
                 f"calls before tests={usage_before['calls']}"))
+    # 1b) MOCK transport for the investigation policy (not a provider call): malformed, out-of-list,
+    #     explicit stop, valid choice; every response is counted, nothing outside the list is accepted
+    allowed = ["ocr_x2_psm6", "ocr_x3_psm6"]
+    mocks = {"malformed": {"content": [{"text": "{nope"}]},
+             "out_of_list": {"model": "mock", "usage": {"input_tokens": 9, "output_tokens": 2},
+                             "content": [{"text": json.dumps({"action": "read_other_file"})}]},
+             "stop": {"model": "mock", "usage": {"input_tokens": 9, "output_tokens": 2},
+                      "content": [{"text": json.dumps({"action": "stop"})}]},
+             "valid": {"model": "mock", "usage": {"input_tokens": 9, "output_tokens": 2},
+                       "content": [{"text": json.dumps({"action": "ocr_x3_psm6"})}]}}
+    got = {k: llm.choose_investigation_action({"observed_token": "a@b.c"}, allowed, transport=lambda b, k=k: mocks[k],
+                                              retries=0) for k in mocks}
+    calls = llm.USAGE.calls
+    llm.USAGE.__init__()
+    out.append(("MOCK investigation policy: malformed / out-of-list / stop -> None, valid -> that action",
+                got == {"malformed": None, "out_of_list": None, "stop": None, "valid": "ocr_x3_psm6"},
+                f"{got}; mock responses counted: {calls} (usage reset afterwards)"))
     # 2) stale cache: same file id + capture time, changed bytes -> must re-extract
     d = copy_dataset(tmp / "stale")
     cache = tmp / "cache"
@@ -745,7 +764,12 @@ def mutations():
             return acct, how, cands
         return patched(audit.Auditor, "correlate_account", c)
 
-    return [("ignore historical identifiers", m_hist, False), ("guess ambiguous account (nearest time)", m_guess_account, False), ("trust reported_status", m_trust, False),
+    def m_unvalidated_investigation():
+        from ghost_audit import investigate as inv
+        return patched(inv, "verbatim", lambda hypothesis, text: True)
+
+    return [("accept investigation hypothesis without verbatim read", m_unvalidated_investigation, False),
+            ("ignore historical identifiers", m_hist, False), ("guess ambiguous account (nearest time)", m_guess_account, False), ("trust reported_status", m_trust, False),
             ("skip images (no OCR)", m_images, True), ("accept future evidence", m_future, False),
             ("overlook replicas", m_replicas, False), ("drop hash identifiers", m_hash, False),
             ("delete required retained record", m_delete_retained, False), ("miss active data flow", m_flow, False),
@@ -759,6 +783,10 @@ def suite_for_mutation(gold, base_scores, cache: bool) -> list:
     """The detection suite: fixtures + sample regression guard + structural validation."""
     from ghost_audit.validate import validate_rows
     fails = []
+    from evaluation import unit_tests
+    for name, ok, detail in unit_tests.run():
+        if not ok:
+            fails.append(f"unit {name.split()[0]}")
     for name, ok, detail in run_fixtures():
         if not ok:
             fails.append(f"fixture {name}")
@@ -844,8 +872,10 @@ def main(argv=None):
     ap.add_argument("--json", default=str(CODE / "runs" / "evaluation_results.json"))
     ap.add_argument("--invariance-json", default=str(CODE / "runs" / "invariance" / "invariance.json"),
                     help="output of evaluation/invariance.py for this code (section reported as NOT RUN if absent)")
-    ap.add_argument("--compare-json", default=str(CODE / "runs" / "compare.json"),
-                    help="output of evaluation/compare.py (before/after table; NOT RUN if absent)")
+    ap.add_argument("--compare-json", default=str(CODE / "runs" / "compare_base.json"),
+                    help="compare.py output vs the original implementation (NOT RUN if absent)")
+    ap.add_argument("--compare-prev-json", default=str(CODE / "runs" / "compare_prev.json"),
+                    help="compare.py output vs the last reviewed implementation (NOT RUN if absent)")
     ap.add_argument("--failfirst-dir", default=str(CODE / "runs" / "failfirst"),
                     help="directory holding base.json and new.json from evaluation/failfirst.py")
     args = ap.parse_args(argv)
@@ -859,24 +889,46 @@ def main(argv=None):
                                 "extra": [tup(s) for s in pred[c][1] if tup(s) not in {tup(x) for x in gold[c][1]}]}
                             for c in gold}
     res["fixtures"] = run_fixtures()
+    from evaluation import unit_tests
+    res["unit_tests"] = unit_tests.run()
     ver0 = Verifier(DATASET, CODE / ".cache" / "verifier")
     gold_nd = set(ver0.verify(read_requests(DATASET / "sample_deletion_requests.csv"), gold)["issues"]
                   .get("resource_not_discoverable_by_audit_at", []))
     tr = {r.case_id: r.trace for r in eng.last_results}
     causes = []
+    internal_s = {r.case_id: r.internal_status for r in eng.last_results}
+    req_s = {q["case_id"]: q for q in read_requests(DATASET / "sample_deletion_requests.csv")}
+    occ = ver0.occurrences()
+    from ghost_audit.util import parse_ts as _pt
     for c, x in res["samples_cases"].items():
+        cut = _pt(req_s[c]["audit_at"])
+        uid = ((tr[c].get("identity") or {}).get("user_ids") or [None])[0]
         for t in x["missing"]:
             rid = t[2]
             cands = (tr[c].get("account_correlation") or {}).get("candidates", [])
-            if f"{c}:{rid}" in gold_nd:
-                cause = ("gold names a resource visible only in evidence captured after audit_at"
-                         if rid in ver0.occurrences() else "gold names a resource that appears in no participant file")
+            same = [p for p in pred[c][1] if p["resource_id"] == rid and p["operation"] == t[3]]
+            if same:
+                cause = ("implementation choice: uncertified case, the same check is emitted as future work without "
+                         "a citation" if internal_s.get(c) == "UNCERTIFIED" else
+                         f"implementation choice: same check cites {same[0]['evidence_id'] or 'nothing'}")
+            elif any(p["resource_id"] == rid for p in pred[c][1]):
+                cause = "implementation choice: same resource, different required operation"
+            elif f"{c}:{rid}" in gold_nd:
+                cause = ("ambiguous specification: gold names a resource visible only in evidence captured after audit_at"
+                         if rid in occ else "unsupported sample answer: gold names a resource that appears in no participant file")
             elif rid.startswith("account_") and rid in cands:
                 cause = f"account not attributable: {len(cands)} unowned workflow submissions in the report window"
             elif rid.startswith("analytics_"):
-                cause = "anonymised analytics record: no identifier; deletion-run attribution would need other requests"
+                cause = "anonymised analytics record: no identifier; attribution would need other requests"
             else:
-                cause = "other (see trace)"
+                adm = [(f, ver0.users_named(ctx)) for f, cap, rt, ctx in occ.get(rid, [])
+                       if cap <= cut and (rt is None or rt <= cut)]
+                if any(uid in named for _, named in adm):
+                    cause = "PARSER/RETRIEVAL OMISSION: an admissible occurrence names the subject"
+                elif adm:
+                    cause = "not linked: admissible occurrences do not name the subject"
+                else:
+                    cause = "other (see trace)"
             causes.append((c, t[3], rid, t[5], cause))
     res["sample_miss_causes"] = causes
     full_pred, full_eng = run_engine(DATASET)
@@ -902,13 +954,33 @@ def main(argv=None):
     res["verifier_samples_pred"] = ver.verify(read_requests(DATASET / "sample_deletion_requests.csv"), pred)
     from evaluation import verifier_defects
     res["verifier_defects"] = verifier_defects.run(DATASET, ver)
-    for key, path in (("invariance", args.invariance_json), ("compare", args.compare_json)):
+    for key, path in (("invariance", args.invariance_json), ("compare", args.compare_json),
+                      ("compare_prev", args.compare_prev_json)):
         if Path(path).exists():
             res[key] = json.loads(Path(path).read_text(encoding="utf-8"))
     ff = Path(args.failfirst_dir)
-    if (ff / "base.json").exists() and (ff / "new.json").exists():
-        res["failfirst"] = {"base": json.loads((ff / "base.json").read_text()),
-                            "new": json.loads((ff / "new.json").read_text())}
+    if (ff / "new.json").exists():
+        res["failfirst"] = {"new": json.loads((ff / "new.json").read_text())}
+        for tag in ("base", "prev"):
+            if (ff / f"{tag}.json").exists():
+                res["failfirst"][tag] = json.loads((ff / f"{tag}.json").read_text())
+                res["failfirst"][tag + "_rev"] = (ff / f"{tag}.rev").read_text().strip() \
+                    if (ff / f"{tag}.rev").exists() else tag
+    from ghost_audit import investigate as inv
+    res["investigation"] = inv.summary(full_eng.investigation)
+    saved_apply = inv.apply
+    try:  # ablation: the same run without verified reads
+        inv.apply = lambda store, outs: None
+        abl, _ = run_engine(DATASET)
+    finally:
+        inv.apply = saved_apply
+    res["investigation_ablation_changed"] = sorted(c for c in full_pred if abl.get(c) != full_pred[c])
+    if not args.quick:
+        from evaluation import agent_eval
+        res["agent_eval"] = agent_eval.run(60)
+    res["internal"] = {r.case_id: {"internal": r.internal_status,
+                                   "blocking": [u["reason"] for u in r.unresolved if u.get("blocking", True)]}
+                       for r in full_eng.last_results}
     res["final_counts"] = dict(Counter(st for st, _ in full_pred.values()))
     res["contract"] = contract_check(ROOT / "output.csv", full_pred)
     res["internal_counts"] = dict(Counter(r.internal_status for r in full_eng.last_results))

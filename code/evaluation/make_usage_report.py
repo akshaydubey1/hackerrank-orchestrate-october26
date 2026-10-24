@@ -70,7 +70,10 @@ def main():
         "request was decided by the rules and no key was configured, so no call was made. These figures are "
         "counted, not estimated.",
         "",
-        "**Status of the model path.** The fallback has never been run against a real provider. Its failure "
+        "**Status of the model paths.** Neither model path (intent fallback; investigation policy, "
+        "`GHOST_AUDIT_INVESTIGATOR=model`) has been run against a real provider. The investigation policy's "
+        "tests use **mock** transports only (malformed, out-of-list, stop and valid responses). "
+        "The intent fallback has never been run against a real provider. Its failure "
         "handling (timeouts, rate limits, malformed or out-of-schema responses) is exercised with fake "
         "responses in the evaluation suite, but the request format, response parsing against the live API and "
         "the cost estimate are **untested**. No ceremonial calls were made to produce non-zero numbers.",
@@ -83,6 +86,11 @@ def main():
         f"| OCR (Tesseract) | {sum(1 for f in files if f in m.get('file_types', {}) and m['file_types'][f] == '.png')} screenshots | local CPU; result cached |",
         f"| PDF text (`pdftotext`) | {sum(1 for f in files if m.get('file_types', {}).get(f) == '.pdf')} documents | local CPU; result cached |",
         f"| SQL snapshots | {sum(1 for f in files if m.get('file_types', {}).get(f) == '.sql')} files | each executed in a throw-away in-memory SQLite database |",
+        "| Bounded OCR re-extraction (investigate.py) | "
+        + (f"{m['investigation']['problems']} problems, {m['investigation']['actions_run']} re-extractions, "
+           f"{m['investigation']['verified']} verified; policy {', '.join(m['investigation']['policy'])}; "
+           f"model calls {m['investigation']['model_calls']}" if m.get("investigation") else "not recorded")
+        + " | local CPU; cached by content hash + action |",
         f"| Extraction status | " + ", ".join(f"{k} {v}" for k, v in sorted(
             __import__("collections").Counter(x["status"] for x in files.values()).items())) + " | see failures below |",
         "",

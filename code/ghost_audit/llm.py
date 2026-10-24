@@ -90,3 +90,49 @@ def classify_intent(text: str, *, timeout: float = 20.0, retries: int = 2) -> di
             USAGE.failures += 1
             time.sleep(min(2 ** attempt, 4))
     return None
+
+
+INVESTIGATION_PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "investigation_policy.md"
+
+
+def choose_investigation_action(problem: dict, allowed: list, *, timeout: float = 20.0, retries: int = 1,
+                                transport=None) -> str | None:
+    """Ask the model which re-extraction tool to run next. Returns an allowed action name or None.
+
+    The model sees only the OCR line, the misread token, the hypothesis and the tools already
+    tried. Its answer is validated against the allowed list; any failure returns None (stop).
+    `transport` is injectable for tests (mock responses); production uses the HTTPS API."""
+    if not allowed or (transport is None and not available()):
+        return None
+    body = {"model": DEFAULT_MODEL, "max_tokens": 40, "temperature": 0,
+            "system": INVESTIGATION_PROMPT_PATH.read_text(encoding="utf-8"),
+            "messages": [{"role": "user", "content": "<problem>\n" + json.dumps(problem) + "\n</problem>\n"
+                          "<allowed_actions>" + json.dumps(allowed) + "</allowed_actions>"}]}
+
+    def http(b):
+        req = urllib.request.Request(
+            os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com").rstrip("/") + "/v1/messages",
+            data=json.dumps(b).encode(), method="POST",
+            headers={"content-type": "application/json", "anthropic-version": "2023-06-01",
+                     "x-api-key": os.environ["ANTHROPIC_API_KEY"]})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read())
+    send = transport or http
+    for attempt in range(retries + 1):
+        try:
+            payload = send(body)
+            usage = payload.get("usage", {})
+            USAGE.record(payload.get("model", DEFAULT_MODEL), int(usage.get("input_tokens", 0)),
+                         int(usage.get("output_tokens", 0)))
+            out = json.loads("".join(b.get("text", "") for b in payload.get("content", [])))
+            act = out.get("action") if isinstance(out, dict) else None
+            if act == "stop":
+                return None
+            if act not in allowed:
+                raise ValueError("action outside the allowed list")
+            return act
+        except (urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError, KeyError, AttributeError):
+            USAGE.failures += 1
+            if transport is None:
+                time.sleep(min(2 ** attempt, 4))
+    return None

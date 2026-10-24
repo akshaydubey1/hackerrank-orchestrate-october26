@@ -531,3 +531,127 @@ branch=feature/correctness-repair
 repo_root=/home/claude/hackerrank-orchestrate-october26
 worktree=main
 parent_agent=none
+
+## [2026-10-24T21:02:18Z] Certification, evidence matrix, CI acceptance gate and bounded investigation
+
+User Prompt (verbatim, secrets redacted):
+[message: attachment e9ab1a4c-attachment.txt; its text follows]
+**The repairs improved important safeguards, but “technically ready to submit” is still too strong.** I checked [PR #1](https://github.com/akshaydubey1/hackerrank-orchestrate-october26/pull/1): it remains a draft at `3be6cb1`, and the [PR workflow passed](https://github.com/akshaydubey1/hackerrank-orchestrate-october26/actions/runs/40128478284). I inspected the code and report; I have not independently executed the delivered ZIP.
+
+Several concrete gaps remain:
+
+| Finding | What I verified |
+|---|---|
+| Missing account evidence can still permit `COMPLETE` | [`audit.py` lines 577–585](https://github.com/akshaydubey1/hackerrank-orchestrate-october26/blob/3be6cb1/code/ghost_audit/audit.py#L577) explicitly marks no known account—and ambiguous but absent candidates—as nonblocking. Candidate absence proves the subject’s absence only if the candidate set is demonstrably exhaustive and includes that subject. |
+| The output has unresolved semantic issues | The [evaluation report](https://github.com/akshaydubey1/hackerrank-orchestrate-october26/blob/3be6cb1/code/evaluation/evaluation_report.md) records **42 INCOMPLETE rows without findings**, plus the empty sample plan. These are not equivalent to fully validated decisions. |
+| Green CI does not represent the full evaluation | The [workflow](https://github.com/akshaydubey1/hackerrank-orchestrate-october26/blob/3be6cb1/.github/workflows/checks.yml) runs `--quick`. Its exit condition checks fixtures, injected verifier defects, and structural contract checks—not all reported semantic issues or the complete regression suite. |
+| Agent behavior remains undemonstrated | The implementation still documents deterministic execution with an unused optional intent fallback. That leaves the specific agent-design improvement from your judging feedback unaddressed. |
+
+The sample decline to **16/32 exact agreement** should neither trigger a return to unsupported shortcuts nor be dismissed as inevitable. The claimed dataset conflicts need independent verification.
+
+Use this focused follow-up prompt:
+
+Continue on feature/correctness-repair in:
+https://github.com/akshaydubey1/hackerrank-orchestrate-october26
+
+Keep PR #1 in draft while resolving the remaining correctness and evaluation gaps. Preserve strict temporal eligibility and batch independence. Do not restore unsupported shortcuts to improve sample scores.
+
+1. Audit completion certification.
+
+Inspect audit.py’s handling of missing accounts and all-candidates-absent reasoning.
+
+A missing account identifier is not proof of absence. A set of absent candidates proves the subject’s account absent only when admissible evidence establishes that the set is exhaustive and contains the subject’s account.
+
+Separate these situations and add independently labeled tests. Do not make missing proof nonblocking merely to allow COMPLETE.
+
+Inspect planner.py’s filtering of verification steps after status selection. Require every necessary verification to have valid supporting evidence before certification; do not certify first and silently remove unsupported steps afterward.
+
+Also inspect legal-hold handling: evidence that a hold exists does not automatically prove that every record covered by it remains available.
+
+2. Investigate the unresolved cases systematically.
+
+Build a case-level evidence matrix for:
+- The 42 verification-only INCOMPLETE rows.
+- The 28 COMPLETE rows without account steps.
+- Every public-sample mismatch.
+
+Record admissible identifiers, resource links, candidate-set coverage, observations, missing proof, and the exact reason for uncertainty.
+
+Search all supplied evidence formats and activity relationships for supported resolution. Do not assume that a text search with no match proves a resource cannot be derived from structured or visual evidence.
+
+Keep internal uncertainty explicit. Do not fabricate findings, invent resource IDs, or silently introduce a new public status.
+
+3. Independently verify alleged specification conflicts.
+
+For each claimed conflict, produce a minimal reproduction with exact source locations, timestamps, expected steps, actual steps, and the governing rule.
+
+Distinguish:
+- A parser or retrieval omission.
+- An unsupported implementation assumption.
+- An ambiguous specification.
+- A genuinely unsupported sample answer.
+
+Draft concise organizer questions for unresolved conflicts. Do not send them without authorization. Keep strict behavior unless an authoritative clarification supports a change.
+
+4. Make CI reflect the claims made in the report.
+
+Run the full regression, metamorphic, operational, mutation, batch-invariance, and independent-verifier checks in CI, splitting jobs if necessary.
+
+Do not gate only on schema validity and selected fixtures. Surface semantic findings explicitly.
+
+Report execution success separately from correctness acceptance. Any unresolved exception must have a visible rationale and affected cases; do not silently waive it or relabel it PASS.
+
+Keep sample metrics visible and identify unexplained regressions. Do not pretend an arbitrary sample threshold establishes hidden correctness.
+
+5. Demonstrate useful agent behavior.
+
+Implement and evaluate a bounded model-driven investigation decision where an actual unresolved evidence problem benefits from it—for example, choosing between native extraction, OCR, visual inspection, or another admissible evidence lookup.
+
+Keep tool permissions, temporal filtering, policy enforcement, and final serialization deterministic. Record actions and outcomes, validate extracted facts, and enforce retry and cost limits.
+
+Compare against the deterministic baseline on independently labeled cases under the same conditions. Do not add ceremonial calls. If real provider execution is unavailable, mark the capability NOT RUN and do not claim it is demonstrated.
+
+6. Investigate provenance and assumptions.
+
+Review the unexplained fixture change using Git history and available session records. Verify its expectation independently; passing the fixture is not evidence of its provenance.
+
+Check whether restore capability is established for the relevant archive or only inferred from another archive’s successful restore.
+
+Preserve authentic traces. Describe coverage gaps accurately and do not reconstruct missing conversations as original records.
+
+7. Rebuild and report accurately.
+
+Add fail-first regression tests for confirmed defects, fix their mechanisms, and rerun the full suite.
+
+Regenerate predictions, Markdown reports, and code.zip from the final implementation. Test the extracted package in a clean directory.
+
+Use separate readiness verdicts for:
+- Reproducibility.
+- Structural output validity.
+- Semantic correctness.
+- Evaluation coverage.
+- Agent capability.
+- Transcript completeness.
+
+Commit and push verified repairs using my verified Git identity. Keep the PR in draft while critical gaps remain. Confirm the remote SHA and CI results, and do not submit to HackerRank.
+
+Finish with measured changes, unresolved cases, evidence-backed organizer questions, artifact checksums, and a precise explanation of what is and is not ready.
+
+[second message during the same turn: attachment bfcaec9d-attachment.txt, whose text is identical to the "Continue on feature/correctness-repair ..." prompt quoted above]
+
+Agent Response Summary:
+Verified the review findings and added fail-first tests for each (they fail on 3be6cb1 and pass now): a missing account and all-absent ambiguous candidates are now blocking, every verification is checked for a supporting citation before the status is chosen, restore capability must be stated for the specific archive, the finance register is context only, and unknown states keep their future check (fixing an empty plan for case_55). Replaced the fuzzy OCR rule with a bounded investigation step (deterministic ladder; model policy implemented but NOT RUN, mocks only) and evaluated it on a labelled set. Added the case-level evidence matrix with conflict reproductions and organiser questions (not sent), an acceptance gate with recorded exceptions, and CI that runs the full reproduction. Correction: the fixture previously called unexplained was written by this session at 2026-10-24T19:49:41Z (shown by the session trace).
+
+Actions:
+* edited code/ghost_audit/{audit,planner,pipeline,ingest,llm}.py; added code/ghost_audit/investigate.py, code/prompts/investigation_policy.md
+* added code/evaluation/{unit_tests,agent_eval,investigate_cases,acceptance}.py, known_exceptions.json; updated fixtures, main, report, reproduce, failfirst, verifier, CI workflow
+* python3 code/evaluation/reproduce.py --baseline f280a63 --previous 3be6cb1; python3 code/evaluation/acceptance.py
+* commit and push to feature/correctness-repair (draft PR #1 kept in draft)
+
+Context:
+tool=Claude (claude.ai app agent workspace)
+model=claude-opus-5-5
+branch=feature/correctness-repair
+repo_root=/home/claude/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none

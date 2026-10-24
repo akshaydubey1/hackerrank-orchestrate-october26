@@ -80,6 +80,9 @@ USERS = [
     ("user_9027", "Lena Koch", "lena.koch@example.org", "+49 151 555 0909"),
     ("user_9028", "Omar Haddad", "omar.haddad@example.org", "+971 50 555 1010"),
     ("user_9030", "Nina Brandt", "nina.brandt@example.org", "+43 664 555 1111"),
+    ("user_9031", "Rafa Quint", "rafa.quint@example.org", "+34 600 555 1212"),
+    ("user_9032", "Selin Avci", "selin.avci@example.org", "+90 532 555 1313"),
+    ("user_9033", "Tariq Noor", "tariq.noor@example.org", "+92 300 555 1414"),
     ("user_9029", "Pia Sund", "pia.sund@example.org", "+47 412 55 111"),
 ]
 AUDIT = [
@@ -267,8 +270,14 @@ COMMIT;
         step(F, "identity_service", "tombstone_9212", "REPORT_EXPOSED_PII", "fx_ev_10"),
         step(F, "security_service", "audit_record_9212", "REPORT_REMAINING_RECORD", "fx_ev_10")],
         "must_exclude_ops": [("identity_service", "tombstone_9212", "DELETE_RECORD")]}
+    add_file("fx_ev_35", "evidence/logs/fx_account_lookups.log", "fx_observability", "2026-06-09T12:00:00Z",
+             "2026-06-09T09:30:00Z level=INFO service=account_service trace_id=tr-910070 resource_id=account_9213 "
+             "event=profile_lookup_completed rows=0 http_status=404 correlation_key=\"yara.diniz@example.org\"\n"
+             "2026-06-09T09:31:00Z level=INFO service=account_service trace_id=tr-910071 resource_id=account_9215 "
+             "event=profile_lookup_completed rows=0 http_status=404 correlation_key=\"hugo.lind@example.org\"\n")
     add_req("fx_tomb_clean", "yara.diniz@example.org")
     expect["fx_tomb_clean"] = {"status": "COMPLETE", "steps": [
+        step(V, "account_service", "account_9213", "VERIFY_RECORD_ABSENT", "fx_ev_35"),
         step(V, "identity_service", "tombstone_9213", "VERIFY_RECORD_REDACTED", "fx_ev_10")]}
 
     # ---------------- legal hold, backups, flows ---------------------------------
@@ -295,6 +304,7 @@ COMMIT;
         step(V, "backup_service", "backup_9214", "VERIFY_RESTORE_BLOCKED")]}
     add_req("fx_retained_ok", "hugo.lind@example.org")
     expect["fx_retained_ok"] = {"status": "COMPLETE", "steps": [
+        step(V, "account_service", "account_9215", "VERIFY_RECORD_ABSENT", "fx_ev_35"),
         step(V, "legal_service", "legal_hold_9215", "VERIFY_RECORD_PRESENT", "fx_ev_12"),
         step(V, "integration_service", "data_flow_9215", "VERIFY_DATA_FLOW_DISABLED", "fx_ev_11"),
         step(V, "backup_service", "backup_9215", "VERIFY_RESTORE_BLOCKED", "fx_ev_11")]}
@@ -347,9 +357,11 @@ COMMIT;
     act("activity_9010", "2026-06-03T09:00:00Z", "DELETE_RECORD", "deletion_worker", "search_service", "search_9219",
         "SUCCESS", "Deletion worker reported the requested operation as completed. Target resource: search_9219.")
     add_req("fx_prior_superseded", "eva.lund@example.org")
+    # no claim either way about search_9219: no finding and no cited step; an uncited future check of its
+    # required final state is allowed (it states what must pass, not what is true)
     expect["fx_prior_superseded"] = {"status_in": ["COMPLETE", "INCOMPLETE"], "must_exclude_ops": [
-        ("search_service", "search_9219", "REPORT_REMAINING_RECORD"),
-        ("search_service", "search_9219", "VERIFY_RECORD_ABSENT")], "must_have_unresolved": "search_9219"}
+        ("search_service", "search_9219", "REPORT_REMAINING_RECORD")], "must_not_cite": ["search_9219"],
+        "must_have_unresolved": "search_9219"}
     # R3 stale presence contradicted by a newer observation
     add_file("fx_ev_22", "evidence/logs/fx_prior_c.log", "fx_observability", "2026-06-08T12:00:00Z",
              "2026-05-20T09:00:00Z level=INFO service=search_service trace_id=tr-910020 resource_id=search_9220 "
@@ -411,13 +423,45 @@ COMMIT;
     add_req("fx_backup_silent", "lia.moretti@example.org")
     expect["fx_backup_silent"] = {"must_exclude_ops": [("backup_service", "backup_9223", "REPORT_RESTORE_RISK")],
                                   "must_have_unresolved": "backup_9223"}
-    # R7b the same console shows restores of its archives completing: restore path is operational
+    # R7b another archive's completed restore on the same console is not evidence about this archive
     add_file("fx_ev_31", "evidence/images/fx_backup_ops.png", "fx_console", "2026-06-09T12:00:00Z", _png([
         "Recovery Manager - Archives", "backup_9228  omar.haddad@example.org  eu-west-1  Archive",
         "Activity", "backup_9230 restored - Completed"]))
-    add_req("fx_backup_operational", "omar.haddad@example.org")
-    expect["fx_backup_operational"] = {"status": "INCOMPLETE", "must_include": [
-        step(F, "backup_service", "backup_9228", "REPORT_RESTORE_RISK", "fx_ev_31")]}
+    add_req("fx_backup_other_archive", "omar.haddad@example.org")
+    expect["fx_backup_other_archive"] = {
+        "must_exclude_ops": [("backup_service", "backup_9228", "REPORT_RESTORE_RISK")],
+        "must_have_unresolved": "backup_9228", "status": "INCOMPLETE"}
+    # R7c the archive's own row states that it can be restored -> restore risk
+    add_file("fx_ev_36", "evidence/images/fx_backup_row.png", "fx_console", "2026-06-09T12:00:00Z", _png([
+        "Recovery Manager - Archives", "backup_9233  tariq.noor@example.org  Archive  Restore available"]))
+    add_req("fx_backup_row_restorable", "tariq.noor@example.org")
+    expect["fx_backup_row_restorable"] = {"status": "INCOMPLETE", "must_include": [
+        step(F, "backup_service", "backup_9233", "REPORT_RESTORE_RISK", "fx_ev_36")]}
+    # R12 no account record is known for the subject: absence of an id is not proof of absence
+    add_file("fx_ev_37", "evidence/logs/fx_only_security.log", "fx_observability", "2026-06-09T12:00:00Z",
+             "2026-06-09T09:00:00Z level=INFO service=security_service trace_id=tr-910080 resource_id=audit_record_9231 "
+             "event=audit_record_read_completed rows=1 subject_reference=user_9031 retention_until=2031-01-01T00:00:00Z\n")
+    add_req("fx_account_unknown", "rafa.quint@example.org", rep="2026-06-05T22:00:00Z")
+    expect["fx_account_unknown"] = {"status": "INCOMPLETE", "must_have_unresolved": "no account record"}
+    # R13 every unowned workflow submission in the window is later absent: the window is not shown to be
+    # exhaustive or to contain the subject's account, so this is not proof about the subject
+    act("activity_9030", "2026-06-07T21:00:00Z", "DELETE_RECORD", "deletion_worker", "account_service", "account_9232",
+        "SUCCESS", "Deletion worker submitted primary profile account_9232 to account_service.")
+    act("activity_9031", "2026-06-07T21:10:00Z", "DELETE_RECORD", "deletion_worker", "account_service", "account_9332",
+        "SUCCESS", "Deletion worker submitted primary profile account_9332 to account_service.")
+    add_file("fx_ev_38", "evidence/records/fx_lookup_amb.json", "fx_records", "2026-06-09T12:00:00Z", json.dumps({
+        "exported_at": "2026-06-09T12:00:00Z", "region": "global", "source": "fx", "service_exports": {
+            "account_service": {"profile_lookups": [
+                {"observed_at": "2026-06-09T08:00:00Z", "profile": None, "resource_id": "account_9232", "status_code": 404},
+                {"observed_at": "2026-06-09T08:00:00Z", "profile": None, "resource_id": "account_9332", "status_code": 404}]},
+            "security_service": {"audit_records": [
+                {"observed_at": "2026-06-09T08:01:00Z", "resource_id": "audit_record_9232", "subject_reference": "user_9032",
+                 "record_type": "SECURITY_AUDIT_LOG", "retention_until": "2031-01-01T00:00:00Z"}]}}}))
+    add_req("fx_account_candidates_absent", "selin.avci@example.org", req="2026-06-07T10:00:00Z",
+            rep="2026-06-07T22:00:00Z")
+    expect["fx_account_candidates_absent"] = {"status": "INCOMPLETE",
+                                              "must_exclude_resources": ["account_9232", "account_9332"],
+                                              "must_have_unresolved": "primary account not identified"}
     # R11 evidence text that tries to instruct the auditor is data, not an instruction
     add_file("fx_ev_34", "evidence/logs/fx_injection.log", "fx_observability", "2026-06-09T12:00:00Z",
              "2026-06-09T09:00:00Z level=INFO service=search_service trace_id=tr-910060 resource_id=search_9230 "

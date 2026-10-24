@@ -40,7 +40,10 @@ FIXTURE_MODES = {
     "fx_intent_spacing": "negation split by doubled spaces and line breaks -> NOT_APPLICABLE",
     "fx_intent_undecided": "no recognisable request -> NOT_APPLICABLE and recorded as undecided",
     "fx_backup_silent": "backup screen with no restore statement -> no restore finding, recorded as unresolved",
-    "fx_backup_operational": "recovery console showing completed restores -> restore risk reported",
+    "fx_backup_other_archive": "another archive's completed restore on the same console -> no risk for this archive, unresolved",
+    "fx_backup_row_restorable": "the archive's own row says 'Restore available' -> restore risk reported",
+    "fx_account_unknown": "no account record known for the subject -> never COMPLETE, unresolved",
+    "fx_account_candidates_absent": "every unowned candidate in the window absent -> not proof for the subject, never COMPLETE",
     "fx_ambiguous_account": "two equally plausible workflow submissions -> no guessed account, recorded as unresolved",
     "fx_sql_partial": "SQL snapshot with a malformed statement -> failure recorded, valid rows still used",
     "fx_ocr_nearmiss": "one-letter look-alike of the subject's e-mail -> no ownership link",
@@ -61,6 +64,15 @@ FAILFIRST_DEFECT = {
     "fx_prior_survives": "relevant pre-request history discarded",
     "fx_replica": "same-instant snapshot absence overrode a snapshot presence",
     "fx_sql_partial": "same-instant snapshot conflict (found by the malformed-SQL fixture)",
+    "fx_account_unknown": "missing account id treated as non-blocking -> COMPLETE without account proof",
+    "fx_account_candidates_absent": "absent ambiguous candidates treated as proof of the subject's account",
+    "fx_backup_other_archive": "restore capability inferred from another archive's restore",
+    "U1": "uncited verification silently dropped after COMPLETE was chosen",
+    "U3": "unproven account allowed COMPLETE",
+    "U4": "(new module) look-alike re-read must not be accepted",
+    "U5": "(new module) verbatim re-read accepted, stops early",
+    "U6": "(new module) hypothesis inside a longer token rejected",
+    "U7": "(new module) policy action outside the tool list refused",
 }
 
 
@@ -90,28 +102,33 @@ def render(res: dict, eng) -> str:
          ""]
 
     # ---------------------------------------------------------------- before / after
-    cmp_ = res.get("compare")
-    L += ["## 1. Before / after (previous commit f280a63 vs this code)", ""]
-    if cmp_:
-        L += ["Both columns are produced by the same scorer and the same independent verifier "
-              "(`code/evaluation/compare.py`); the batch-invariance row comes from `invariance.py` run on each "
-              "code tree.", "", "| Measure | Before (f280a63) | After (this code) |", "|---|---|---|"]
+    def cmp_section(cmp_, label):
+        out = []
+        if not cmp_:
+            return out + [f"NOT RUN (no comparison against {label}).", ""]
+        out += [f"| Measure | {label} | This code |", "|---|---|---|"]
         for k in cmp_["before"]:
-            L.append(f"| {k} | {cmp_['before'][k]} | {cmp_['after'][k]} |")
-        L += ["", f"**{len(cmp_['changes'])} of 518 predictions changed.** Root cause of each change "
-              "(first matching rule in `compare.py:explain`):", "", "| Root cause | Cases |", "|---|---|"]
+            out.append(f"| {k} | {cmp_['before'][k]} | {cmp_['after'][k]} |")
+        out += ["", f"**{len(cmp_['changes'])} of 518 predictions changed.** Root cause of each change "
+                "(first matching rule in `compare.py:explain`):", "", "| Root cause | Cases |", "|---|---|"]
         for k, v in sorted(cmp_["change_causes"].items(), key=lambda kv: -kv[1]):
-            L.append(f"| {k} | {v} |")
+            out.append(f"| {k} | {v} |")
         flips = [c for c in cmp_["changes"] if c[1] != c[2]]
-        L += ["", f"Status changes: {len(flips)}" + (" — " + ", ".join(f"{c[0]} {c[1]}→{c[2]}" for c in flips[:60])
-                                                     + (" …" if len(flips) > 60 else "") if flips else "") + ".", ""]
-        L += ["Reading the table: the sample scores went **down** on purpose. The previous code reached "
-              "24/32 exact answers partly by (a) naming resources that appear only in files captured after "
-              "`audit_at` and (b) assigning accounts and anonymised analytics records to requests by "
-              "queue order across the whole request file. Both are removed; Section 2 attributes every "
-              "remaining sample miss to one of these causes.", ""]
-    else:
-        L += ["NOT RUN (no `compare.json`).", ""]
+        out += ["", f"Status changes: {len(flips)}" + (" — " + ", ".join(f"{c[0]} {c[1]}→{c[2]}" for c in flips[:80])
+                                                       + (" …" if len(flips) > 80 else "") if flips else "") + ".", ""]
+        return out
+    L += ["## 1. Before / after", "",
+          "Every column is produced by the same scorer and the same independent verifier (`code/evaluation/compare.py`); "
+          "batch invariance comes from `invariance.py` run on each code tree.", "",
+          "### 1a. Original implementation (f280a63) vs this code", ""]
+    L += cmp_section(res.get("compare"), "f280a63")
+    L += ["### 1b. Last reviewed revision (3be6cb1, PR #1 head before this pass) vs this code", ""]
+    L += cmp_section(res.get("compare_prev"), "3be6cb1")
+    L += ["Reading the tables: sample agreement went **down** on purpose, twice. f280a63 reached 24/32 exact answers "
+          "partly by naming resources visible only in files captured after `audit_at` and by assigning accounts by "
+          "queue order. 3be6cb1 still certified COMPLETE when the subject's account was unidentified, or when every "
+          "candidate in an ambiguous workflow window was absent, although neither proves the subject's account "
+          "absent. Section 2 and `case_investigation.md` classify every remaining sample difference.", ""]
 
     # ---------------------------------------------------------------- A. samples
     L += ["## 2. Public samples (32 cases) — sample-tuned, not an estimate of hidden-test accuracy", "",
@@ -130,7 +147,8 @@ def render(res: dict, eng) -> str:
           "a missing step counts as wrong in every field):", "", "| Field | Accuracy |", "|---|---|"]
     L += [f"| {k} | {pct(v)} |" for k, v in s["field_accuracy"].items()]
     L += ["", "### Every remaining sample miss and its cause", "",
-          "No predicted step is absent from the gold answers (0 FP). Each missing gold step:", "",
+          f"Extra predicted steps: {s['fp']} (all are future checks with empty evidence_id in uncertified cases, "
+          "where the gold answer certifies COMPLETE with a citation). Each missing gold step:", "",
           "| Case | Operation | Resource | Gold evidence | Cause |", "|---|---|---|---|---|"]
     for c, op, rid, ev, cause in sorted(res.get("sample_miss_causes", []), key=lambda t: int(t[0].split("_")[1])):
         L.append(f"| {c} | {op} | {rid} | {ev or '—'} | {cause} |")
@@ -149,25 +167,77 @@ def render(res: dict, eng) -> str:
     for name, ok, detail in fx:
         L.append(f"| `{name}` | {FIXTURE_MODES.get(name, '')} | {_yes(ok)} | {detail} |")
     ff = res.get("failfirst")
-    L += ["", "### Fail-first evidence for the regressions added in this repair pass", ""]
+    L += ["", "### Fail-first evidence", ""]
     if ff:
-        b, n = ff["base"], ff["new"]
-        L += ["Today's fixtures run against the previous implementation (f280a63) and against this code "
+        n = ff["new"]
+        tags = [t for t in ("base", "prev") if t in ff]
+        L += ["Today's synthetic cases and unit tests run against earlier revisions and against this code "
               "(`code/evaluation/failfirst.py`). A regression test counts only if it fails before the fix.", "",
-              f"Previous code: {sum(v['pass'] for v in b.values())}/{len(b)} cases pass; this code: "
-              f"{sum(v['pass'] for v in n.values())}/{len(n)}.", "",
-              "| Fixture | Defect it reproduces | f280a63 | This code |", "|---|---|---|---|"]
+              " ; ".join(f"{ff[t + '_rev']}: {sum(v['pass'] for v in ff[t].values())}/{len(ff[t])} pass" for t in tags)
+              + f" ; this code: {sum(v['pass'] for v in n.values())}/{len(n)} pass.", "",
+              "| Test | Defect it reproduces | " + " | ".join(ff[t + "_rev"] for t in tags) + " | This code |",
+              "|---|---|" + "---|" * len(tags) + "---|"]
         for c in sorted(n):
-            if not b.get(c, {}).get("pass", False):
-                L.append(f"| `{c}` | {FAILFIRST_DEFECT.get(c, FIXTURE_MODES.get(c, ''))} | "
-                         f"FAIL ({b.get(c, {}).get('status', 'n/a')}, {b.get(c, {}).get('n_steps', '?')} steps) | "
-                         f"{'PASS' if n[c]['pass'] else '**FAIL**'} |")
+            if any(not ff[t].get(c, {}).get("pass", False) for t in tags):
+                cells = []
+                for t in tags:
+                    x = ff[t].get(c, {})
+                    cells.append("PASS" if x.get("pass") else (f"FAIL ({x.get('status', 'n/a')}"
+                                                                + (f", {x['n_steps']} steps)" if x.get("status") != "unit" else ")")))
+                L.append(f"| `{c}` | {FAILFIRST_DEFECT.get(c, FIXTURE_MODES.get(c, ''))} | " + " | ".join(cells)
+                         + f" | {'PASS' if n[c]['pass'] else '**FAIL**'} |")
         L.append("")
-        L.append("Fixtures that pass on both trees (e.g. `fx_ocr_nearmiss`, `fx_embedded_future`, "
-                 "`fx_stale_contradicted`, `fx_injection`) are guards against reintroducing a hack, not proof of a fix.")
+        L.append("Tests that pass on every tree (e.g. `fx_ocr_nearmiss`, `fx_embedded_future`, `fx_injection`, "
+                 "`fx_backup_row_restorable`) guard against reintroducing a defect; they are not proof of a fix.")
     else:
         L.append("NOT RUN (no fail-first results supplied).")
     L.append("")
+
+    ut = res.get("unit_tests", [])
+    L += ["", f"### Unit tests: {sum(1 for x in ut if x[1])}/{len(ut)} passed", "",
+          "| Test | Result | Detail |", "|---|---|---|"] + [f"| {n_} | {_yes(ok)} | {d} |" for n_, ok, d in ut]
+    L += [""]
+    # ---------------------------------------------------------------- agent capability
+    invs = res.get("investigation", {})
+    L += ["## 3b. Bounded investigation step (agent capability)", "",
+          "**Problem.** Screenshot OCR sometimes misreads an identifier (dataset: evidence_32 reads `areed1433@gmail.com` "
+          "as `areedi433` / `areedt433`). The previous code accepted a one-edit look-alike as exposure (fuzzy). That rule "
+          "is removed. Instead, when an OCR token is a near-miss of exactly one known identifier, a policy chooses which "
+          "deterministic re-extraction to run (re-OCR at ×2/×3 with different page segmentation, optional binarisation) "
+          "under a budget of 3 per problem and 60 per run; a hypothesis is accepted **only** if a re-extraction reads it "
+          "verbatim as a whole token. Policies cannot read other files, accept or edit facts, or touch temporal "
+          "filtering, policy rules or serialisation (unit tests U4–U7, mutant 'accept investigation hypothesis without "
+          "verbatim read').", "",
+          f"**On the challenge data** (policy `{', '.join(invs.get('policy', []))}`): {invs.get('problems', 0)} problems, "
+          f"{invs.get('verified', 0)} verified, {invs.get('actions_run', 0)} re-extractions, {invs.get('model_calls', 0)} model calls.", "",
+          "| File | OCR read | Hypothesis | Actions | Verified |", "|---|---|---|---|---|"]
+    for o in invs.get("outcomes", []):
+        L.append(f"| {o['problem']['file_id']} | `{o['problem']['observed']}` | `{o['problem']['hypothesis']}` | "
+                 f"{', '.join(a['action'] for a in o['attempts']) or '—'} | {o['verified']} |")
+    abl = res.get("investigation_ablation_changed")
+    L += ["", f"Ablation (same run without verified reads): {len(abl) if abl is not None else 'NOT RUN'} of 518 predictions "
+          "change. On this dataset the step replaces an unsafe rule without changing any answer; its value is shown "
+          "on the labelled set below.", ""]
+    ae = res.get("agent_eval")
+    if ae:
+        L += ["**Labelled evaluation** (`code/evaluation/agent_eval.py`, 60 seeded console-row images, label = the "
+              "address actually drawn; 40 show a known identifier, 20 show a look-alike decoy that must NOT be accepted; "
+              "same images, tools and budgets for every strategy):", "",
+              "| Strategy | Status | Problems found | True identifiers verified (of 40) | Decoys wrongly accepted (of 20) | Re-extractions |",
+              "|---|---|---|---|---|---|"]
+        for r in ae:
+            if r["status"] == "RUN":
+                L.append(f"| {r['strategy']} | RUN | {r['problems_found']} | {r['true_verified']} | "
+                         f"{r['decoys_wrongly_verified']} | {r['re_extractions']} |")
+            else:
+                L.append(f"| {r['strategy']} | {r['status']} | — | — | — | — |")
+        L += ["", "The model policy is implemented (`ModelPolicy`, prompt `prompts/investigation_policy.md`, schema-checked "
+              "JSON, timeout, retries, call budget, usage accounting) and tested only with **mock** transports "
+              "(Section 5). It has **not** been executed against a real provider, so no claim is made that it improves "
+              "on the deterministic ladder. Most misreads are not even recognised as near-misses (problem detection, "
+              "not re-extraction, is the bottleneck).", ""]
+    else:
+        L += ["Labelled evaluation: NOT RUN (`--quick`).", ""]
 
     # ---------------------------------------------------------------- C. metamorphic / invariance
     if "metamorphic" in res:
@@ -298,101 +368,72 @@ def render(res: dict, eng) -> str:
 
 SPEC = """## 9. Specification conflicts, ambiguities and blockers
 
-### 9.1 Post-cutoff discovery in the gold samples (conflict with the stated time contract)
+The full case-level evidence matrix (every uncertified case, every sample mismatch, every workflow candidate and
+where it occurs in any evidence format) and minimal reproductions are in `code/evaluation/case_investigation.md`.
+Summary of the classification there:
 
-The contract says *"Use only information available at or before `audit_at` … Evidence created later must not change
-the answer"* and *"Never cite … an evidence item captured after the case's `audit_at`."* Five gold answers contain an
-uncited future-work step for a security record that appears **only** in a file captured after `audit_at`:
+| Conflict | Classification | Effect |
+|---|---|---|
+| C1 gold steps for records visible only in files captured after `audit_at` (case_09/23/24/29/30); subject↔account links for 17 candidates exist only in such files | ambiguous specification (capture time vs line time) | strict reading kept; the alternative was measured (analysis only) and does not reproduce the gold answers either |
+| C2 gold steps for ids that occur in no evidence (case_18 `audit_record_6645`, case_20 `audit_record_5569`) | genuinely unsupported sample answer | not reproducible |
+| C3 case_04 (`account_004` nowhere; `analytics_901` anonymised, no link) | genuinely unsupported by admissible evidence | uncertified |
+| C4 ambiguous workflow windows (e.g. case_25/26 share report time; candidates `account_3136`, `account_5684`) | would need an unsupported implementation assumption (cross-request order) | account unresolved; case uncertified |
+| C5 finance retention register (evidence_27) | ambiguous specification (is it a "supplied legal hold"?) | context only; not taken as proof of retention |
+| C6 archive restore capability inferred from another archive's restore (case_55) | ambiguous specification | restore state unresolved; case uncertified |
+| No public status for "not proven either way" | contract gap | uncertified cases serialised as INCOMPLETE with future checks only |
 
-| Case | audit_at | Gold step | Only file naming the resource | File captured_at | Line time |
-|---|---|---|---|---|---|
-| case_09 | 2026-09-16T09:00Z | VERIFY_RECORD_PRESENT audit_record_4902 | evidence_06 (`structured_service_events_eu_west_20260918.log`) | 2026-09-18T11:55:24Z | 2026-09-16T08:52:59Z |
-| case_23 | 2026-09-15T12:00Z | VERIFY_RECORD_PRESENT audit_record_4128 | evidence_02 | 2026-09-17T12:00Z | before audit_at |
-| case_24 | 2026-09-15T12:00Z | VERIFY_RECORD_PRESENT audit_record_7095 | evidence_02 | 2026-09-17T12:00Z | before audit_at |
-| case_29 | 2026-09-15T12:00Z | VERIFY_RECORD_PRESENT audit_record_3954 | evidence_02 | 2026-09-17T12:00Z | before audit_at |
-| case_30 | 2026-09-15T12:00Z | VERIFY_RECORD_PRESENT audit_record_1707 | evidence_02 | 2026-09-17T12:00Z | before audit_at |
+Six draft organiser questions (not sent) are at the end of `case_investigation.md`.
 
-Minimal reproduction (case_09): `grep -rl audit_record_4902 dataset/evidence` → only
-`logs/structured_service_events_eu_west_20260918.log`; `grep evidence_06 dataset/evidence_files.csv` → captured
-2026-09-18T11:55:24Z; case_09 audit_at is 2026-09-16T09:00:00Z; no activity row names the record. Reproducing the
-gold step therefore requires reading a file that did not exist at audit_at. This code does not, and the fixture
-`fx_late_capture` and the metamorphic test "late-captured files with pre-audit_at line times" enforce it.
-Two further gold steps (case_18 `audit_record_6645`, case_20 `audit_record_5569`) name records that appear in **no**
-participant file or activity row.
+### 9.1 What "uncertified" means in the output
 
-**Clarification question for the organisers:** *"For case_09 (and case_23/24/29/30) the sample answer verifies
-`audit_record_4902` as retained, but that id appears only in evidence_06, captured 2026-09-18, after the case's
-audit_at of 2026-09-16 (the log line itself is dated 2026-09-16T08:52:59Z). Should a file captured after audit_at be
-used when its lines describe events before audit_at — for uncited future-work steps only, or not at all? Is the
-gold step for case_18 `audit_record_6645` derived from a participant-visible file?"*
-
-### 9.2 case_04 — gold COMPLETE that no admissible evidence supports
-
-Gold: COMPLETE with `VERIFY_RECORD_ABSENT account_004 [evidence_54]` and `VERIFY_RECORD_ANONYMIZED analytics_901
-[evidence_56]`. `account_004` occurs in no evidence file and no activity row (the verifier reports it as not
-discoverable); evidence_54 is a 7-row failover dump that never mentions it. `analytics_901` appears in evidence_56
-with every identifier null and in one `ANONYMIZE_RECORD` activity, seven minutes before the report, that names no
-person; no workflow submission falls in the report window. Linking either record to user_04 would need the id
-numbering convention (`user_04` ↔ `account_004`) or time proximity alone, which this code refuses to use. The case
-is therefore uncertified and serialised as INCOMPLETE with no steps — the only empty INCOMPLETE row in any output
-(it is a sample; the 518-case output has none).
-
-### 9.3 No output status for "not proven either way" (contract gap)
-
-COMPLETE must be evidence-backed; INCOMPLETE is described as findings + remediation + verification. A case with no
-supported violation **and** an unproven required final state fits neither. This code keeps an internal UNCERTIFIED
-state and serialises it as INCOMPLETE carrying only the future verification checks (empty evidence_id, no
-fabricated findings), with every blocking reason in the per-case trace. In the 518-case output this applies to the
-cases counted under `internal_counts['UNCERTIFIED']` (Section 8), mainly because the primary account could not be
-attributed. If the organisers expect COMPLETE for "no violation found", these rows will score as status errors.
-
-### 9.4 Account attribution without request order
-
-When several unowned deletion-worker submissions fall in a request's report window and nothing links one of them to
-the subject, the account is not attributed. Samples show the gold answers resolve such groups in request-file order
-(e.g. case_25 → account_3136, case_26 → account_5684 within the same window), which depends on which other requests
-exist and is excluded by design (request-batch invariance, Section 4). If **every** candidate is proven absent, the
-subject's account is absent whichever it is: the case can be COMPLETE, but no account step is emitted because its id
-cannot be named without guessing (case_25/26/28/31 in the samples).
+COMPLETE requires every required final state to be proven by a cited admissible observation **before** the status
+is chosen, including the subject's primary account. An account is proven only when it is identified (an identifier
+in admissible evidence, or the unique workflow submission for this request alone) and its state is observed. A
+missing account id is not proof of absence, and a set of absent candidates is not proof about the subject unless
+evidence shows the set is exhaustive and contains the subject's account (a report-time window shows neither).
+Cases with no supported violation but an unproven required state are UNCERTIFIED and serialised as INCOMPLETE with
+only the future verification checks (empty evidence_id, no invented findings). If the organisers expect COMPLETE for
+these, they score as status errors; if they expect the account to be attributed by request order, the gold answers
+depend on information this design deliberately excludes.
 """
 
 FAILURES = """## 10. Failures found and improvements made (chronological)
 
 | # | Failure observed | Root cause (layer) | Fix | Regression guard |
 |---|---|---|---|---|
-| 1 | Sample status 29/32, 9/32 exact | intent lexicon missed "verify my profile is gone" (intent); bundle absence overrode direct 404s (temporal) | added verification phrasings; direct observations beat capture absence | samples, `fx_future` |
-| 2 | Security records reported absent although present | multi-capture JSON bundles treated as complete (temporal) | capture absence only from single-capture collections covering the subject | verifier `absence_from_partial_capture` |
-| 3 | Connector screen linked to the wrong customer | OCR identifiers taken page-wide (ingestion) | screens: same-line identifiers only | `fx_png_pii`, `fx_decoy` |
-| 4 | 34 "retention violations" | SQL inventories treated as complete (temporal) | inventories never prove absence | verifier `retention_violation` |
-| 5 | Metamorphic "future evidence" changed 131 cases | never-observed resources declared absent from older captures | absence needs the resource to be known before the capture | metamorphic C6 |
-| 6 | Metamorphic "paraphrase" changed 163 statuses | `eliminen` / Spanish negation missed (intent) | stem-based multilingual patterns + negation | metamorphic C7 |
-| 7 | **Review:** 116 verifier temporal issues; post-cutoff files named resources in plans | late files used to name retained records and withdraw proofs (temporal) | strict cutoff on capture time **and** line time before linking, discovery, state and planning; catalog aliases only from links made by audit_at | `fx_late_capture`, metamorphic late-capture / future-activity tests |
-| 8 | **Review:** 57/2097 outputs changed with batch composition; 4 changed without the sample file | account and analytics attribution by queue order across the request pools (identity) | per-request correlation only; ambiguous windows left unresolved | `fx_ambiguous_account`, invariance.py, mutant "guess ambiguous account" |
-| 9 | **Review:** pre-request history discarded | observations outside [requested_at, audit_at] dropped (state) | prior state carried forward unless this subject's deletion run followed it | `fx_prior_survives`, `fx_prior_superseded`, mutant "forget pre-request history" |
-| 10 | **Review:** COMPLETE without proof (52 cases had no account proof); unproven verification silently dropped | planner certified COMPLETE when any one verification was cited | COMPLETE requires every required final state proven; otherwise UNCERTIFIED with reasons; candidate-absence rule | `fx_intent_es`, mutant "certify COMPLETE without proof", verifier D1 |
-| 11 | **Review:** "remove me from your newsletter", "old phone number" → deletion | verb matched without its object (intent) | target-aware rules: verb + nearest scope noun in the same sentence; UNDECIDED recorded | `fx_intent_newsletter/limited/old_phone/undecided` |
-| 12 | **Review:** dataset-specific OCR substitutions and a `.jr` hack | parsers patched to the dataset (ingestion) | removed; raw OCR kept; no fuzzy linking | operational check 7, `fx_ocr_nearmiss`, `fx_decoy` |
-| 13 | **Review:** SQL statement errors swallowed; register PDF facts ignored | parser error handling (ingestion) | statement-by-statement retry with recorded warnings; legal-register rows extracted as facts | `fx_sql_partial`, extraction-failure fixture |
-| 14 | Restore risk asserted from a backup screen saying nothing about restore; then the opposite over-correction left case_55 empty | restore capability inferred from silence (policy) | needs an affirmative statement: explicit allow/deny, or the same console showing its archives' restores completing | `fx_backup_silent`, `fx_backup_operational` |
-| 15 | Same-instant snapshots of two databases: absence overrode presence | snapshot row time vs snapshot time (state) | a row in a snapshot is present at the snapshot time; equal-time conflict keeps presence | `fx_replica`, `fx_sql_partial` (found by the new SQL fixture) |
-| 16 | Metamorphic formatting test changed 2 cases (a regression introduced by the intent rewrite in this pass; the previous code passed it) | negation patterns assumed single spaces (intent) | whitespace normalised before matching | `fx_intent_spacing`, metamorphic formatting test |
-| 17 | Mutation harness corrupted static methods; mutants out of date with new APIs | test tooling | restore raw class attribute; mutants rewritten for the new signatures | clean suite run |
+| 1 | Sample status 29/32, 9/32 exact | intent lexicon gaps; bundle absence overrode direct 404s | verification phrasings; direct observations beat capture absence | samples, `fx_future` |
+| 2 | Security records reported absent although present | multi-capture JSON bundles treated as complete | capture absence only from single-capture collections covering the subject | verifier `absence_from_partial_capture` |
+| 3 | Connector screen linked to the wrong customer | OCR identifiers taken page-wide | screens: same-line identifiers only | `fx_png_pii`, `fx_decoy` |
+| 4 | 34 "retention violations" | SQL inventories treated as complete | inventories never prove absence | verifier `retention_violation` |
+| 5 | Metamorphic "future evidence" changed 131 cases | never-observed resources declared absent | absence needs the resource known before the capture | metamorphic test |
+| 6 | Metamorphic "paraphrase" changed 163 statuses | Spanish stems / negation missed | stem-based multilingual patterns + negation | metamorphic test |
+| 7 | Review of f280a63: 116 temporal verifier issues | late files named resources in plans | strict cut-off on capture **and** line time before linking, discovery, state, planning | `fx_late_capture`, late-capture and future-activity metamorphic tests |
+| 8 | Review of f280a63: 57/2097 batch-dependent outputs | attribution by queue order / request pools | per-request correlation only | `fx_ambiguous_account`, invariance.py, mutant "guess ambiguous account" |
+| 9 | Review of f280a63: pre-request history discarded | observations before requested_at dropped | prior state carried forward unless this subject's deletion run followed | `fx_prior_survives`, `fx_prior_superseded` |
+| 10 | Review of f280a63: intent over-triggered | verb matched without its object | target-aware rules; UNDECIDED recorded | `fx_intent_newsletter/limited/old_phone/undecided` |
+| 11 | Review of f280a63: OCR substitution table, `.jr` hack, swallowed SQL errors | dataset-specific patches | removed; SQL statement warnings recorded; register PDF facts extracted | operational check, `fx_sql_partial` |
+| 12 | Same-instant snapshots: absence overrode presence | row time vs snapshot time | presence at snapshot time wins on equal time | `fx_replica`, `fx_sql_partial` |
+| 13 | Negation broken by doubled whitespace (introduced by the intent rewrite in this effort; f280a63 passed) | patterns assumed single spaces | whitespace normalised | `fx_intent_spacing`, formatting metamorphic test |
+| 14 | **Review of 3be6cb1:** COMPLETE allowed with no account known, or with all ambiguous candidates absent | missing proof marked non-blocking | both are blocking; COMPLETE needs the identified account proven | `fx_account_unknown`, `fx_account_candidates_absent`, unit U3 |
+| 15 | **Review of 3be6cb1:** unsupported verification dropped after COMPLETE was chosen | planner filtered steps after the status decision | each verification checked for a supporting citation before status selection; COMPLETE asserts it | unit U1, U2, mutant "certify COMPLETE without proof" |
+| 16 | **Review of 3be6cb1:** register row described as "retained per the register" | existence of a register row taken as availability | recorded as context only, never as proof of retention; organiser question | C5 |
+| 17 | **Review of 3be6cb1:** restore capability inferred from other archives' completed restores | page-wide restore wording | restore wording must be on a line naming this archive | `fx_backup_other_archive`, `fx_backup_row_restorable` |
+| 18 | **Review of 3be6cb1:** one-edit fuzzy OCR "corroboration" | fuzzy rule in exposure check | replaced by the bounded investigation step with verbatim validation | unit U4–U7, mutant "accept investigation hypothesis without verbatim read", agent_eval decoys |
+| 19 | Report said a fixture had unexplained provenance | the author (this agent) did not check the trace | the session trace shows it was written by this session at 2026-10-24T19:49:41Z; its expectation was re-checked (per-archive `ACTIVE` restore statement, NOT_FOUND account) | `fx_text_handover` |
+| 20 | Mutation harness corrupted static methods; mutants stale after API changes | test tooling | restore raw attribute; mutants rewritten | clean suite run |
 """
 
 LIMITATIONS = """## 11. Remaining limitations (honest list)
 
-* **{uncert} uncertified cases** in the 518-case output are INCOMPLETE rows with only future verification steps
-  (Section 9.3). They are not proven incomplete; they are not proven complete either.
-* **Account attribution** is the main source of unresolved items (Section 9.4). Accounts are only linked by an
-  identifier in admissible evidence or by a workflow submission that is the unique match for this request alone.
-* **Late-captured files are ignored entirely.** If the organisers' key uses them (Section 9.1), the affected
-  future-work steps are missed by design.
-* **Absence proofs** come only from explicit 404 / NOT_FOUND observations, single-capture JSON collections that
-  cover the subject, and full-table replica dumps. SQL inventories never prove absence.
-* **Restore capability** needs an affirmative statement; a backup screen without one stays unresolved.
-* **OCR** is Tesseract only; screenshots are used only through exact identifier or data-catalog joins.
-* **Intent** is rule-based ({n_notapp} NOT_APPLICABLE in the 518 output). The optional model fallback is used only
-  for requests the rules mark UNDECIDED and only with `ANTHROPIC_API_KEY`; it was **not executed against a real
-  provider** in this environment — only its mocked fault-handling tests ran (Section 5).
+* **{uncert} uncertified cases** in the 518-case output (Section 9.1): not proven incomplete, not proven complete.
+* **Account attribution** is the dominant blocker; the only admissible way to identify an account is an identifier in
+  admissible evidence or the unique workflow submission for the request alone.
+* **Late-captured files are ignored entirely** (C1); if the key uses them, the affected steps are missed by design.
+* **Absence proofs** come only from explicit 404 / NOT_FOUND observations, single-capture JSON collections covering
+  the subject and full-table replica dumps; SQL inventories never prove absence.
+* **Restore capability** needs a statement about the specific archive.
+* **OCR** is Tesseract only; most misreads are not recognised as near-misses, so the investigation step resolves few.
+* **Intent** is rule-based ({n_notapp} NOT_APPLICABLE in the 518 output). The model fallbacks (intent, investigation
+  policy) were **not executed against a real provider**; only mock-transport tests ran.
 * Hidden-test accuracy is unknown; the sample numbers above are fit on the samples, not an estimate.
 """

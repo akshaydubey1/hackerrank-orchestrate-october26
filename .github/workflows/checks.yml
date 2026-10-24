@@ -7,32 +7,75 @@ on:
 permissions:
   contents: read
 
+env:
+  BASELINE_REV: f280a63
+  PREVIOUS_REV: 3be6cb1
+
 jobs:
-  audit:
+  execute:
+    name: execution (fresh prediction, committed output reproduced)
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: System tools (OCR, PDF text)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr poppler-utils
-      - name: Python dependencies
-        run: python -m pip install -r code/requirements.txt
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr poppler-utils
+      - run: python -m pip install -r code/requirements.txt
       - name: Predict all 518 requests with fresh extraction
         run: python code/main.py --no-cache --out /tmp/output.csv --trace-dir /tmp/runs
-      - name: Committed output.csv matches a fresh prediction
+      - name: Committed output.csv equals the fresh prediction
         run: cmp output.csv /tmp/output.csv
-      - name: Samples, synthetic cases, verifier and verifier-defect fixtures
+
+  evaluate:
+    name: full evaluation (regression, metamorphic, operational, mutation, invariance, verifier, fail-first)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # baseline revisions for the before/after and fail-first runs
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr poppler-utils
+      - run: python -m pip install -r code/requirements.txt
+      - name: Reproduce everything (invariance, comparisons, fail-first, full suite, reports, acceptance)
+        run: python code/evaluation/reproduce.py --baseline "$BASELINE_REV" --previous "$PREVIOUS_REV"
+      - name: Regenerated output.csv equals the committed one
+        run: git diff --exit-code -- output.csv
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: evaluation
+          path: |
+            code/runs/evaluation_results.json
+            code/runs/invariance/invariance.json
+            code/runs/compare_*.json
+            code/runs/failfirst/*.json
+            code/evaluation/evaluation_report.md
+            code/evaluation/acceptance_report.md
+            code/evaluation/case_investigation.md
+            code/evaluation/usage_report.md
+
+  acceptance:
+    name: correctness acceptance (FAIL blocks; EXCEPTIONs listed with rationale)
+    needs: evaluate
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: evaluation
+          path: artifact
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # upload-artifact strips the common prefix "code/" from the uploaded paths
+      - name: Acceptance gate (writes the job summary)
         run: |
-          python code/evaluation/main.py --quick --out /tmp/evaluation_report.md --json /tmp/evaluation_results.json
-          python - <<'PY'
-          import json, sys
-          r = json.load(open("/tmp/evaluation_results.json"))
-          fx = [n for n, ok, _ in r["fixtures"] if not ok]
-          vd = [x[0] for x in r["verifier_defects"] if not x[3]]
-          c = r["contract"]
-          print("fixtures failing:", fx, "| verifier defects missed:", vd, "| contract errors:", c.get("errors"))
-          sys.exit(1 if fx or vd or c.get("errors") or not c.get("matches_fresh_prediction") else 0)
-          PY
+          python code/evaluation/acceptance.py \
+            --results artifact/runs/evaluation_results.json \
+            --invariance artifact/runs/invariance/invariance.json
