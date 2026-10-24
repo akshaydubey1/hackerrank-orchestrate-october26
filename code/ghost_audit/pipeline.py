@@ -11,7 +11,6 @@ from .activity import ActivityStream
 from .audit import Auditor
 from .identity import IdentityIndex
 from .ingest import load_evidence
-from .intent import classify
 from .policy import Policy
 from .validate import case_key, validate_rows
 
@@ -22,6 +21,8 @@ def read_requests(path: Path) -> list:
 
 
 class Engine:
+    """Loads inputs once; each request is then audited independently of every other request."""
+
     def __init__(self, dataset_dir: Path, cache_dir: Path | None = None):
         t0 = time.time()
         self.dataset_dir = dataset_dir
@@ -31,24 +32,11 @@ class Engine:
         self.policy = Policy(dataset_dir)
         self.auditor = Auditor(self.store, self.identity, self.activity, self.policy)
         self.load_seconds = time.time() - t0
-        self._assigned = False
 
-    def prepare(self, request_sets: list):
-        """Account correlation must see every request in the dataset at once (global uniqueness).
-        Only request fields are used -- never any answer file."""
-        allq = []
-        for reqs in request_sets:
-            for q in reqs:
-                q = dict(q)
-                q["_deletion"] = classify(q["request_text"]).is_deletion
-                uids = self.identity.resolve_email(q["email"])
-                q["_user"] = uids[0] if uids else None
-                allq.append(q)
-        self.auditor.assign_accounts(allq)
-        self._assigned = True
+    def prepare(self, request_sets: list = ()):
+        """Kept for API compatibility: no cross-request preparation exists any more."""
 
     def run(self, requests: list) -> list:
-        assert self._assigned, "call prepare() first"
         return [self.auditor.audit(q) for q in sorted(requests, key=lambda r: case_key(r["case_id"]))]
 
 

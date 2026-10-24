@@ -17,6 +17,7 @@ import argparse
 import contextlib
 import csv
 import hashlib
+import io
 import json
 import random
 import re
@@ -45,12 +46,10 @@ def run_engine(dataset: Path, requests_file: str = "deletion_requests.csv", extr
                requests=None):
     eng = Engine(dataset, (CODE / ".cache") if cache else None)
     reqs = requests if requests is not None else read_requests(dataset / requests_file)
-    pools = [read_requests(dataset / "deletion_requests.csv")]
-    if (dataset / "sample_deletion_requests.csv").exists():
-        pools.append(read_requests(dataset / "sample_deletion_requests.csv"))
-    pools += list(extra_pools)
-    eng.prepare(pools)
-    return {r.case_id: (r.status, r.steps) for r in eng.run(reqs)}, eng
+    # each request is audited on its own: no cross-request pools (extra_pools kept for API compatibility)
+    results = eng.run(reqs)
+    eng.last_results = results
+    return {r.case_id: (r.status, r.steps) for r in results}, eng
 
 
 def tup(s):
@@ -128,7 +127,6 @@ def run_fixtures(cache=False) -> list:
     exp = fixtures.build(root)
     eng = Engine(root, None)
     reqs = read_requests(root / "deletion_requests.csv")
-    eng.prepare([reqs])
     results = []
     failures_expected = exp.pop("__extraction_failures__", set())
     got_failures = {f for f, _ in eng.store.failures}
@@ -142,6 +140,10 @@ def run_fixtures(cache=False) -> list:
             ok = ok and [k(s) for s in r.steps] == [k(s) for s in x["steps"]]
         for m in x.get("must_include", []):
             ok = ok and k(m) in {k(s) for s in r.steps}
+        if x.get("must_have_unresolved"):
+            ok = ok and any(x["must_have_unresolved"] in json.dumps(u) for u in r.unresolved)
+        for rid in x.get("must_exclude_resources", []):
+            ok = ok and not any(s["resource_id"] == rid for s in r.steps)
         for sysid, rid, op in x.get("must_exclude_ops", []):
             ok = ok and not any(s["system_id"] == sysid and s["resource_id"] == rid and s["operation"] == op
                                 for s in r.steps)
@@ -289,6 +291,70 @@ def meta_future_evidence(base: dict, tmp: Path) -> tuple:
     (d / "evidence" / "logs" / "future_trace.log").write_text("\n".join(lines) + "\n", encoding="utf-8")
     with open(d / "evidence_files.csv", "a", newline="", encoding="utf-8") as fh:
         csv.writer(fh).writerow(["evidence_96", "evidence/logs/future_trace.log", "future", "2027-01-01T01:00:00Z"])
+    pred, _ = run_engine(d)
+    diff = [c for c in base if pred.get(c) != base[c]]
+    return not diff, f"{len(diff)} of {len(base)} cases changed"
+
+
+def meta_late_capture(base: dict, tmp: Path) -> tuple:
+    """Files exported after every audit_at whose lines are time-stamped BEFORE each case's audit_at
+    (the pattern that leaks if only embedded times are checked): no output may change."""
+    d = copy_dataset(tmp / "late")
+    reqs = read_requests(d / "deletion_requests.csv")
+    from ghost_audit.util import iso, parse_ts
+    from datetime import timedelta
+    lines = []
+    for i, q in enumerate(reqs):
+        t = iso(parse_ts(q["audit_at"]) - timedelta(hours=1))
+        lines.append(f"{t} level=INFO service=security_service trace_id=tr-78{i:04d} resource_id=audit_record_{78000 + i} "
+                     f"event=audit_record_read_completed rows=1 correlation_key=\"{q['email']}\" "
+                     f"retention_until=2031-01-01T00:00:00Z")
+        lines.append(f"{t} level=INFO service=account_service trace_id=tr-79{i:04d} resource_id=account_{79000 + i} "
+                     f"event=profile_lookup_completed rows=0 http_status=404 correlation_key=\"{q['email']}\"")
+    (d / "evidence" / "logs" / "late_export.log").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    with open(d / "evidence_files.csv", "a", newline="", encoding="utf-8") as fh:
+        csv.writer(fh).writerow(["evidence_97", "evidence/logs/late_export.log", "late", "2027-01-01T01:00:00Z"])
+    pred, _ = run_engine(d)
+    diff = [c for c in base if pred.get(c) != base[c]]
+    return not diff, f"{len(diff)} of {len(base)} cases changed"
+
+
+def meta_future_activity(base: dict, tmp: Path) -> tuple:
+    """Activity rows dated after each case's audit_at (identity links, deletion claims, syncs)."""
+    d = copy_dataset(tmp / "factivity")
+    reqs = read_requests(d / "deletion_requests.csv")
+    from ghost_audit.util import iso, parse_ts
+    from datetime import timedelta
+    with open(d / "system_activity.csv", "a", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh)
+        for i, q in enumerate(reqs):
+            t = iso(parse_ts(q["audit_at"]) + timedelta(minutes=5))
+            w.writerow([f"activity_{90000 + 2 * i}", t, "LINK_RESOURCE_IDENTITY", "data_catalog", "search_service",
+                        f"search_{80000 + i}", "SUCCESS",
+                        f"Data catalog linked search_{80000 + i} (search_{80000 + i}) to {q['email']}."])
+            w.writerow([f"activity_{90001 + 2 * i}", t, "SYNC_RECORD", "integration_service", "search_service",
+                        f"data_flow_{80000 + i}", "SUCCESS",
+                        f"Active connector repopulated downstream resource search_{80000 + i}."])
+    pred, _ = run_engine(d)
+    diff = [c for c in base if pred.get(c) != base[c]]
+    return not diff, f"{len(diff)} of {len(base)} cases changed"
+
+
+def meta_format(base: dict, tmp: Path) -> tuple:
+    """Formatting only: every CSV field quoted, CRLF line endings, request e-mails upper-cased and
+    padded, request text with extra whitespace."""
+    d = copy_dataset(tmp / "fmt")
+    for name in ("deletion_requests.csv", "user_identities.csv", "user_audit_log.csv", "system_activity.csv",
+                 "evidence_files.csv"):
+        rows = list(csv.DictReader(open(d / name, encoding="utf-8")))
+        if name == "deletion_requests.csv":
+            for r in rows:
+                r["email"] = "  " + r["email"].upper() + " "
+                r["request_text"] = "  " + r["request_text"].replace(" ", "  ") + "\n"
+        with open(d / name, "w", newline="", encoding="utf-8") as fh:
+            w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()), quoting=csv.QUOTE_ALL, lineterminator="\r\n")
+            w.writeheader()
+            w.writerows(rows)
     pred, _ = run_engine(d)
     diff = [c for c in base if pred.get(c) != base[c]]
     return not diff, f"{len(diff)} of {len(base)} cases changed"
@@ -478,7 +544,6 @@ def operational_tests(tmp: Path) -> list:
     # 3) missing evidence file listed in the manifest is reported, run still completes
     os.remove(d / "evidence" / "logs" / "support_replica.log")
     e3 = Engine(d, cache)
-    e3.prepare([read_requests(d / "deletion_requests.csv")])
     n = len(e3.run(read_requests(d / "deletion_requests.csv")))
     out.append(("missing evidence file recorded, all cases still answered",
                 any("not found" in err for _, err in e3.store.failures) and n == 518, f"{n} cases"))
@@ -506,6 +571,24 @@ def operational_tests(tmp: Path) -> list:
     Engine(DATASET, CODE / ".cache")
     cached = time.time() - t
     out.append(("fresh vs cached evidence loading", True, f"fresh {fresh:.1f}s (OCR + PDF + SQL), cached {cached:.1f}s"))
+    # 6) every manifest-listed file is accounted for with a distinct status; raw text is kept for
+    #    PDFs/screenshots next to the normalised observations
+    e6 = Engine(DATASET, CODE / ".cache")
+    with open(DATASET / "evidence_files.csv", encoding="utf-8") as fh:
+        listed = [r["file_id"] for r in csv.DictReader(fh)]
+    statuses = Counter(e6.store.files[f].status for f in listed if f in e6.store.files)
+    allowed = {"ok", "facts-only", "no-direct-facts", "empty", "missing", "error", "unsupported"}
+    raw_ok = all(e6.store.files[f].text for f in listed
+                 if e6.store.files[f].path.suffix.lower() in (".pdf", ".png", ".jpg", ".jpeg"))
+    out.append(("every manifest file accounted for; raw OCR/PDF text preserved",
+                len(listed) == sum(statuses.values()) and set(statuses) <= allowed and raw_ok,
+                f"{len(listed)} listed, statuses {dict(statuses)}, raw text for all PDFs/images: {raw_ok}"))
+    # 7) no dataset-specific substitutions or look-alike hacks in the parsers
+    src = (CODE / "ghost_audit" / "parsers.py").read_text(encoding="utf-8") + \
+        (CODE / "ghost_audit" / "audit.py").read_text(encoding="utf-8")
+    hacks = [w for w in ("OCR_FIXES", "_fuzzy_token", "'jr'", '"jr"') if w in src]
+    out.append(("no dataset-specific OCR substitutions or fuzzy-link hacks in the predictor", not hacks,
+                f"found: {hacks or 'none'}"))
     return out
 
 
@@ -557,16 +640,16 @@ def mutations():
         return patched(parsers, "ocr_text", lambda p: "")
 
     def m_future():
-        return patched(audit.Auditor, "_admissible", staticmethod(lambda o, a, w=None: True))
+        return patched(audit.Auditor, "admissible", lambda self, o, cut: True)
 
     def m_replicas():
         orig = audit.Auditor.state_at
 
-        def st(self, rid, audit_at, uid=None, system_hint=None, window_start=None, known_since=None):
+        def st(self, rid, cut, uid, v, request_at, runs, known_since=None):
             saved = self.obs_by_resource.get(rid, [])
             self.obs_by_resource[rid] = [o for o in saved if o.replica in ("primary",)]
             try:
-                return orig(self, rid, audit_at, uid, system_hint, window_start, known_since)
+                return orig(self, rid, cut, uid, v, request_at, runs, known_since)
             finally:
                 self.obs_by_resource[rid] = saved
         return patched(audit.Auditor, "state_at", st)
@@ -597,8 +680,8 @@ def mutations():
     def m_order():
         orig = planner.build_steps
 
-        def b(ts):
-            status, steps, notes = orig(ts)
+        def b(ts, **kw):
+            status, steps, notes = orig(ts, **kw)
             steps = list(reversed(steps))
             return status, [dict(s, step_no=i + 1) for i, s in enumerate(steps)], notes
         return patched(audit, "build_steps", b)
@@ -607,16 +690,69 @@ def mutations():
         return patched(intent, "NEGATION_PATTERNS", [])
 
     def m_window():
-        orig = audit.Auditor._admissible
-        return patched(audit.Auditor, "_admissible",
-                       staticmethod(lambda o, a, w=None: orig(o, a, None)))
+        # ignore embedded event times: admit on file capture time only
+        def adm(self, o, cut):
+            cap = audit.parse_ts(o.captured_at)
+            return cap is not None and cap <= cut
+        return patched(audit.Auditor, "admissible", adm)
 
-    return [("ignore historical identifiers", m_hist, False), ("trust reported_status", m_trust, False),
+    def m_prior():
+        # forget pre-request history: treat any observation before requested_at as unknown
+        orig = audit.Auditor.state_at
+
+        def st(self, rid, cut, uid, v, request_at, runs, known_since=None):
+            saved = self.obs_by_resource.get(rid, [])
+            self.obs_by_resource[rid] = [o for o in saved if not (audit.parse_ts(o.observed_at) and request_at
+                                                                   and audit.parse_ts(o.observed_at) < request_at)]
+            try:
+                return orig(self, rid, cut, uid, v, request_at, runs, known_since)
+            finally:
+                self.obs_by_resource[rid] = saved
+        return patched(audit.Auditor, "state_at", st)
+
+    def m_undecided():
+        # equate UNDECIDED intent with deletion
+        orig = intent.classify_rules
+
+        def c(text):
+            r = orig(text)
+            if r.label == "UNDECIDED":
+                return intent.IntentResult(True, "DELETION", "mutant")
+            return r
+        return patched(intent, "classify_rules", c)
+
+    def m_drop_unproven():
+        # call a case COMPLETE even when no evidence-backed verification exists
+        orig = planner.build_steps
+
+        def b(ts, **kw):
+            status, steps, unresolved = orig(ts)  # ignores the caller's request to withhold COMPLETE
+            if status == "UNCERTIFIED":
+                status = "COMPLETE"
+            return status, steps, unresolved
+        return patched(audit, "build_steps", b)
+
+    def m_guess_account():
+        # resolve an ambiguous workflow window by picking the submission nearest to reported_at
+        orig = audit.Auditor.correlate_account
+
+        def c(self, q, uid, cut, v):
+            acct, how, cands = orig(self, q, uid, cut, v)
+            if acct is None and cands:
+                rep = audit.parse_ts(q["reported_at"])
+                pool = [a for a in self.account_subs if a.resource_id in cands]
+                return min(pool, key=lambda a: abs((a.ts - rep).total_seconds())), "mutant nearest", []
+            return acct, how, cands
+        return patched(audit.Auditor, "correlate_account", c)
+
+    return [("ignore historical identifiers", m_hist, False), ("guess ambiguous account (nearest time)", m_guess_account, False), ("trust reported_status", m_trust, False),
             ("skip images (no OCR)", m_images, True), ("accept future evidence", m_future, False),
             ("overlook replicas", m_replicas, False), ("drop hash identifiers", m_hash, False),
             ("delete required retained record", m_delete_retained, False), ("miss active data flow", m_flow, False),
             ("scramble step order", m_order, False), ("ignore negation in requests", m_negation, False),
-            ("ignore request window (stale evidence)", m_window, False)]
+            ("ignore embedded event time (capture time only)", m_window, False),
+            ("forget pre-request history", m_prior, False), ("treat UNDECIDED intent as deletion", m_undecided, False),
+            ("certify COMPLETE without proof", m_drop_unproven, False)]
 
 
 def suite_for_mutation(gold, base_scores, cache: bool) -> list:
@@ -640,6 +776,63 @@ def suite_for_mutation(gold, base_scores, cache: bool) -> list:
 
 
 # ---------------------------------------------------------------------------- report
+def contract_check(path: Path, fresh: dict) -> dict:
+    """Independent re-check of the submitted CSV file on disk (not of in-memory predictions)."""
+    from ghost_audit.util import sha256_file
+    from ghost_audit.validate import validate_rows
+    if not path.exists():
+        return {"present": False}
+    raw = path.read_bytes()
+    text = raw.decode("utf-8")
+    header = text.splitlines()[0] if text else ""
+    rows = list(csv.DictReader(io.StringIO(text)))
+    req_ids = [r["case_id"] for r in read_requests(DATASET / "deletion_requests.csv")]
+    known = {r["file_id"] for r in csv.DictReader(open(DATASET / "evidence_files.csv", encoding="utf-8"))}
+    known |= {r["activity_id"] for r in csv.DictReader(open(DATASET / "system_activity.csv", encoding="utf-8"))}
+    known |= {r["audit_id"] for r in csv.DictReader(open(DATASET / "user_audit_log.csv", encoding="utf-8"))}
+    issues = validate_rows(rows, req_ids, known)
+    errors = [e for e in issues if "WARNING" not in e]
+    warnings = [e for e in issues if "WARNING" in e]
+    disk = {r["case_id"]: (r["deletion_status"], json.loads(r["steps_json"])) for r in rows}
+    n_steps = sum(len(v[1]) for v in disk.values())
+    empty_incomplete = [c for c, (st, sp) in disk.items() if st == "INCOMPLETE" and not sp]
+    return {"present": True, "sha256": sha256_file(path), "header": header, "rows": len(rows),
+            "unique_case_ids": len(set(r["case_id"] for r in rows)), "expected_rows": len(req_ids),
+            "errors": errors, "warnings_count": len(warnings), "steps": n_steps,
+            "empty_incomplete": empty_incomplete, "matches_fresh_prediction": disk == fresh,
+            "status_counts": dict(Counter(v[0] for v in disk.values()))}
+
+
+def environment() -> dict:
+    import platform
+    import sqlite3
+    import subprocess
+    from importlib import metadata
+    from ghost_audit import parsers
+    from ghost_audit.util import code_fingerprint, sha256_file
+
+    def tool(cmd):
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+            return (out.stdout or out.stderr).strip().splitlines()[0]
+        except (OSError, subprocess.SubprocessError, IndexError):
+            return "not available"
+
+    def pkg(name):
+        try:
+            return metadata.version(name)
+        except metadata.PackageNotFoundError:
+            return "not installed"
+    return {"code_fingerprint": code_fingerprint(CODE), "parser_version": parsers.PARSER_VERSION,
+            "python": platform.python_version(), "sqlite": sqlite3.sqlite_version,
+            "tesseract": tool(["tesseract", "--version"]), "pdftotext": tool(["pdftotext", "-v"]),
+            "pypdf": pkg("pypdf"), "reportlab": pkg("reportlab"), "pillow": pkg("pillow"),
+            "inputs_sha256": {p.name: sha256_file(p)[:16] for p in sorted(DATASET.glob("*.csv"))
+                              if p.name != "output.csv"},
+            "model_env": "ANTHROPIC_API_KEY set" if __import__("os").environ.get("ANTHROPIC_API_KEY")
+            else "ANTHROPIC_API_KEY not set (rule-only run)"}
+
+
 def pct(x):
     return f"{100 * x:.1f}%"
 
@@ -649,6 +842,12 @@ def main(argv=None):
     ap.add_argument("--quick", action="store_true")
     ap.add_argument("--out", default=str(HERE / "evaluation_report.md"))
     ap.add_argument("--json", default=str(CODE / "runs" / "evaluation_results.json"))
+    ap.add_argument("--invariance-json", default=str(CODE / "runs" / "invariance" / "invariance.json"),
+                    help="output of evaluation/invariance.py for this code (section reported as NOT RUN if absent)")
+    ap.add_argument("--compare-json", default=str(CODE / "runs" / "compare.json"),
+                    help="output of evaluation/compare.py (before/after table; NOT RUN if absent)")
+    ap.add_argument("--failfirst-dir", default=str(CODE / "runs" / "failfirst"),
+                    help="directory holding base.json and new.json from evaluation/failfirst.py")
     args = ap.parse_args(argv)
     t0 = time.time()
     res = {}
@@ -660,6 +859,26 @@ def main(argv=None):
                                 "extra": [tup(s) for s in pred[c][1] if tup(s) not in {tup(x) for x in gold[c][1]}]}
                             for c in gold}
     res["fixtures"] = run_fixtures()
+    ver0 = Verifier(DATASET, CODE / ".cache" / "verifier")
+    gold_nd = set(ver0.verify(read_requests(DATASET / "sample_deletion_requests.csv"), gold)["issues"]
+                  .get("resource_not_discoverable_by_audit_at", []))
+    tr = {r.case_id: r.trace for r in eng.last_results}
+    causes = []
+    for c, x in res["samples_cases"].items():
+        for t in x["missing"]:
+            rid = t[2]
+            cands = (tr[c].get("account_correlation") or {}).get("candidates", [])
+            if f"{c}:{rid}" in gold_nd:
+                cause = ("gold names a resource visible only in evidence captured after audit_at"
+                         if rid in ver0.occurrences() else "gold names a resource that appears in no participant file")
+            elif rid.startswith("account_") and rid in cands:
+                cause = f"account not attributable: {len(cands)} unowned workflow submissions in the report window"
+            elif rid.startswith("analytics_"):
+                cause = "anonymised analytics record: no identifier; deletion-run attribution would need other requests"
+            else:
+                cause = "other (see trace)"
+            causes.append((c, t[3], rid, t[5], cause))
+    res["sample_miss_causes"] = causes
     full_pred, full_eng = run_engine(DATASET)
     ver = Verifier(DATASET, CODE / ".cache" / "verifier")
     lc = Counter()
@@ -667,17 +886,35 @@ def main(argv=None):
         if st == "NOT_APPLICABLE":
             continue
         lc["deletions"] += 1
-        lc["amb"] += cid in full_eng.auditor.account_ambiguous
-        lc["tb"] += cid in full_eng.auditor.account_tiebreak
         if st == "COMPLETE":
             lc["complete"] += 1
             lc["complete_no_acct"] += not any(s["system_id"] == "account_service" for s in steps)
-    lc["run_linked"] = sum(len(v) for v in full_eng.auditor.run_links.values())
-    lc["amb_analytics"] = len(full_eng.auditor.run_ambiguous)
+    for r in full_eng.last_results:
+        lc["internal_" + r.internal_status] += 1
+        if r.unresolved:
+            lc["with_unresolved"] += 1
+        acct = ((r.trace or {}).get("account_correlation") or {}).get("basis", "")
+        if "ambiguous" in str(acct):
+            lc["amb"] += 1
     res["limitation_counts"] = dict(lc)
     res["verifier_eval"] = ver.verify(read_requests(DATASET / "deletion_requests.csv"), full_pred)
     res["verifier_gold"] = ver.verify(read_requests(DATASET / "sample_deletion_requests.csv"), gold)
     res["verifier_samples_pred"] = ver.verify(read_requests(DATASET / "sample_deletion_requests.csv"), pred)
+    from evaluation import verifier_defects
+    res["verifier_defects"] = verifier_defects.run(DATASET, ver)
+    for key, path in (("invariance", args.invariance_json), ("compare", args.compare_json)):
+        if Path(path).exists():
+            res[key] = json.loads(Path(path).read_text(encoding="utf-8"))
+    ff = Path(args.failfirst_dir)
+    if (ff / "base.json").exists() and (ff / "new.json").exists():
+        res["failfirst"] = {"base": json.loads((ff / "base.json").read_text()),
+                            "new": json.loads((ff / "new.json").read_text())}
+    res["final_counts"] = dict(Counter(st for st, _ in full_pred.values()))
+    res["contract"] = contract_check(ROOT / "output.csv", full_pred)
+    res["internal_counts"] = dict(Counter(r.internal_status for r in full_eng.last_results))
+    res["unresolved_reasons"] = dict(Counter(
+        u["reason"].split(":")[0].split(" (")[0] for r in full_eng.last_results for u in r.unresolved
+        if u.get("blocking", True)))
     if not args.quick:
         tmp = Path(tempfile.mkdtemp(prefix="ghost_meta_"))
         meta = []
@@ -687,6 +924,9 @@ def main(argv=None):
                          ("consistently replace every e-mail and its hash", meta_reid_people),
                          ("add 50 unrelated people and records", meta_unrelated_records),
                          ("add evidence captured after every audit_at", meta_future_evidence),
+                         ("add late-captured files with pre-audit_at line times", meta_late_capture),
+                         ("add activity dated after each audit_at", meta_future_activity),
+                         ("CSV quoting, CRLF, upper-case/padded e-mails, extra whitespace", meta_format),
                          ("paraphrase every request (same intent)", meta_paraphrase)]:
             t = time.time()
             ok, detail = fn(full_pred, tmp)
@@ -705,6 +945,7 @@ def main(argv=None):
             muts.append((name, bool(fails), fails[:4]))
         res["mutations"] = muts
     res["seconds"] = round(time.time() - t0, 1)
+    res["environment"] = environment()
     Path(args.json).parent.mkdir(parents=True, exist_ok=True)
     Path(args.json).write_text(json.dumps(res, indent=2, default=str), encoding="utf-8")
     write_report(res, Path(args.out), full_eng)
@@ -712,88 +953,8 @@ def main(argv=None):
 
 
 def write_report(res, path: Path, eng):
-    from report_text import NARRATIVE  # static, hand-written findings log
-    s = res["samples"]
-    L = ["# Evaluation report — Ghost Data Still Exists", "",
-         "_Generated by `python3 code/evaluation/main.py`; numbers below come from that run._", "",
-         "## A. Public samples (32 cases) — sample-tuned, not a hidden-test estimate", "",
-         "The rules were developed while inspecting these samples, so these numbers measure fit, not "
-         "generalisation. Sections B–E are the independent evidence.", "",
-         "| Metric | Value |", "|---|---|",
-         f"| Case-level status accuracy | {s['status_correct']}/{s['cases']} ({pct(s['status_accuracy'])}) |",
-         f"| Step-level precision (7-field step, excl. step_no) | {pct(s['step_precision'])} ({s['tp']} TP, {s['fp']} FP) |",
-         f"| Step-level recall | {pct(s['step_recall'])} ({s['fn']} FN) |",
-         f"| Step-level F1 | {pct(s['step_f1'])} |",
-         f"| Exact-sequence accuracy (status + full ordered array) | {s['exact_sequence_n']}/{s['cases']} ({pct(s['exact_sequence'])}) |",
-         f"| Citation accuracy (gold cited steps with same evidence_id) | {pct(s['citation_accuracy'])} |",
-         f"| False COMPLETE (pred COMPLETE, gold INCOMPLETE) | {len(s['false_complete'])} {s['false_complete']} |",
-         f"| False INCOMPLETE (pred INCOMPLETE, gold COMPLETE) | {len(s['false_incomplete'])} {s['false_incomplete']} |",
-         f"| Retention violations (verifier) | {len(res['verifier_samples_pred']['issues'].get('retention_violation', []))} |",
-         "", "Field-level accuracy (gold steps aligned to predicted steps on phase+system+resource):", "",
-         "| Field | Accuracy |", "|---|---|"]
-    L += [f"| {k} | {pct(v)} |" for k, v in s["field_accuracy"].items()]
-    L += ["", "### Every remaining sample discrepancy", "", "| Case | Pred | Gold | Missing steps | Extra steps |",
-          "|---|---|---|---|---|"]
-    for c, x in sorted(res["samples_cases"].items(), key=lambda kv: int(kv[0].split("_")[1])):
-        if x["missing"] or x["extra"] or x["pred"] != x["gold"]:
-            fm = lambda ts: "; ".join(f"{t[3]} {t[2]} [{t[5] or '-'}]" for t in ts) or "—"
-            L.append(f"| {c} | {x['pred']} | {x['gold']} | {fm(x['missing'])} | {fm(x['extra'])} |")
-    L += ["", NARRATIVE["sample_discrepancies"].format(**res["limitation_counts"]), ""]
-    fx = res["fixtures"]
-    L += ["## B. Independent synthetic fixtures (hand-written expectations)", "",
-          f"**{sum(ok for _, ok, _ in fx)}/{len(fx)} passed.** The fixture world (`code/evaluation/fixtures.py`) "
-          "shares no ids, names or files with the challenge data; expectations were written from the "
-          "problem statement and policy before running the predictor.", "",
-          "| Fixture | Failure mode covered | Result | Detail |", "|---|---|---|---|"]
-    for name, ok, detail in fx:
-        L.append(f"| `{name}` | {NARRATIVE['fixture_modes'].get(name, '')} | {'PASS' if ok else 'FAIL'} | {detail} |")
-    if "metamorphic" in res:
-        L += ["", "## C. Metamorphic tests on the real 518-case dataset", "",
-              "| Transformation (meaning-preserving) | Result | Detail | Seconds |", "|---|---|---|---|"]
-        for name, ok, detail, sec in res["metamorphic"]:
-            L.append(f"| {name} | {'PASS' if ok else 'FAIL'} | {detail} | {sec} |")
-        L += ["", "| Deliberate semantic change | Expected | Result | Detail |", "|---|---|---|---|"]
-        exp = {"S1 activate restore path": "INCOMPLETE + REPORT_RESTORE_RISK citing new file",
-               "S2 expose prohibited identifier": "INCOMPLETE + REPORT_EXPOSED_PII",
-               "S3 surviving failover replica": "INCOMPLETE + REPORT_REMAINING_RECORD citing new file",
-               "S4 remove deletion authorisation": "NOT_APPLICABLE, []"}
-        for name, ok, detail in res["semantic"]:
-            L.append(f"| {name} | {exp[name]} | {'PASS' if ok else 'FAIL'} | {detail} |")
-        L += ["", "### Operational reliability", "", "| Check | Result | Detail |", "|---|---|---|"]
-        for name, ok, detail in res["operational"]:
-            L.append(f"| {name} | {'PASS' if ok else 'FAIL'} | {detail} |")
-        L += ["", "## D. Mutation testing (does the suite catch injected faults?)", "",
-              f"Suite = fixtures + sample regression guard (status and step TP/FP may not get worse) + "
-              f"structural validation. Clean run failures: {res['suite_clean_failures'] or 'none'}.", "",
-              "| Injected fault | Detected | First failing checks |", "|---|---|---|"]
-        for name, det, fails in res["mutations"]:
-            L.append(f"| {name} | {'yes' if det else '**NO (survived)**'} | {'; '.join(fails) or '—'} |")
-        L += ["", NARRATIVE["mutation_notes"]]
-    ve = res["verifier_eval"]
-    L += ["", "## E. Independent verifier over the final 518-case output", "",
-          NARRATIVE["verifier_intro"], "",
-          "| Verifier stat | 518 eval predictions | 32 sample predictions | 32 gold answers (false-alarm check) |",
-          "|---|---|---|---|"]
-    keys = sorted(set(ve["stats"]) | set(res["verifier_gold"]["stats"]))
-    for k in keys:
-        L.append(f"| {k} | {ve['stats'].get(k, 0)} | {res['verifier_samples_pred']['stats'].get(k, 0)} | "
-                 f"{res['verifier_gold']['stats'].get(k, 0)} |")
-    ikeys = sorted(set(ve["issues"]) | set(res["verifier_gold"]["issues"]) | set(res["verifier_samples_pred"]["issues"]))
-    for k in ikeys:
-        L.append(f"| issue: {k} | {len(ve['issues'].get(k, []))} | "
-                 f"{len(res['verifier_samples_pred']['issues'].get(k, []))} | {len(res['verifier_gold']['issues'].get(k, []))} |")
-    if not ikeys:
-        L.append("| issues of any kind | 0 | 0 | 0 |")
-    L += ["", "## F. Extraction coverage", "", "| Evidence file | Type | Status | Observations |", "|---|---|---|---|"]
-    for fid, ef in eng.store.files.items():
-        if ef.status != "ok" or ef.path.suffix in (".png", ".pdf"):
-            L.append(f"| {fid} | {ef.path.suffix} | {ef.status} | {ef.n_observations} |")
-    L += ["", f"All other {sum(1 for ef in eng.store.files.values() if ef.status == 'ok' and ef.path.suffix not in ('.png', '.pdf'))} "
-          "text/JSON/SQL/log files parsed with observations. Files with 0 direct observations are still used "
-          "through data-catalog aliases (statement numbers, file names) found in their text.", "",
-          NARRATIVE["failures_and_improvements"], "", NARRATIVE["limitations"].format(**res["limitation_counts"]), "",
-          f"_Suite runtime: {res['seconds']} s._", ""]
-    path.write_text("\n".join(L), encoding="utf-8")
+    from evaluation.report import render
+    path.write_text(render(res, eng), encoding="utf-8")
 
 
 if __name__ == "__main__":

@@ -23,7 +23,8 @@ def main():
         "# Usage report — final full-dataset run",
         "",
         f"_Source: `{mpath.name}` written by the run that produced the submitted `output.csv` "
-        f"(code revision `{m['code_revision']}`, parser `{m['parser_version']}`)._",
+        f"(git revision at run time `{m['code_revision']}`, code fingerprint `{m.get('code_fingerprint', '?')}`, "
+        f"parser `{m['parser_version']}`)._",
         "",
         "## Summary",
         "",
@@ -41,7 +42,10 @@ def main():
         f"| Estimated cost per request | ${u['estimated_cost_usd'] / n:.8f} |",
         f"| Wall-clock time | {m['seconds_total']} s total, of which {m['seconds_loading']} s evidence loading |",
         f"| Extraction cache | {'enabled' if m['cache']['enabled'] else 'disabled (fresh extraction)'}; "
-        f"hits {m['cache']['hits']}, misses {m['cache']['misses']} |",
+        f"hits {m['cache']['hits']}, misses {m['cache']['misses']} (key = content sha256 + parser version + file id + capture time) |",
+        "| Intent decisions (source:label) | " + ", ".join(f"{k} {v}" for k, v in m.get("intent_decisions", {}).items()) + " |",
+        "| Requests eligible for the model fallback (rules UNDECIDED) | "
+        + str(sum(v for k, v in m.get("intent_decisions", {}).items() if k.endswith("UNDECIDED"))) + " |",
         "",
         "## Per-model totals",
         "",
@@ -66,16 +70,23 @@ def main():
         "request was decided by the rules and no key was configured, so no call was made. These figures are "
         "counted, not estimated.",
         "",
+        "**Status of the model path.** The fallback has never been run against a real provider. Its failure "
+        "handling (timeouts, rate limits, malformed or out-of-schema responses) is exercised with fake "
+        "responses in the evaluation suite, but the request format, response parsing against the live API and "
+        "the cost estimate are **untested**. No ceremonial calls were made to produce non-zero numbers.",
+        "",
         "## Preprocessing attributable to the run (local compute, no tokens)",
         "",
         "| Step | Count | Notes |",
         "|---|---|---|",
         f"| Evidence files in manifest | {len(files)} | all processed; failures listed below |",
-        "| OCR (Tesseract) | screenshots in `evidence/images` | local CPU, cached by content hash + parser version |",
-        "| PDF text (`pdftotext`) | documents in `evidence/documents` | local CPU, cached likewise |",
-        "| SQL snapshots | executed in throw-away in-memory SQLite | never touches disk or other snapshots |",
+        f"| OCR (Tesseract) | {sum(1 for f in files if f in m.get('file_types', {}) and m['file_types'][f] == '.png')} screenshots | local CPU; result cached |",
+        f"| PDF text (`pdftotext`) | {sum(1 for f in files if m.get('file_types', {}).get(f) == '.pdf')} documents | local CPU; result cached |",
+        f"| SQL snapshots | {sum(1 for f in files if m.get('file_types', {}).get(f) == '.sql')} files | each executed in a throw-away in-memory SQLite database |",
+        f"| Extraction status | " + ", ".join(f"{k} {v}" for k, v in sorted(
+            __import__("collections").Counter(x["status"] for x in files.values()).items())) + " | see failures below |",
         "",
-        "Files that yielded no direct observations (still used via data-catalog aliases in their text): "
+        "Extraction failures and partial extractions recorded during the run: "
         + (", ".join(f"`{fid}` ({err})" for fid, err in m["extraction_failures"]) or "none") + ".",
         "",
         "If the model fallback is enabled, cost is estimated with the per-million-token prices in "
@@ -84,9 +95,9 @@ def main():
         "",
         "## Development-time AI usage (not part of the run)",
         "",
-        "The solution was written with an AI coding agent (Claude, model `claude-opus-5-5`, in the Claude app). "
+        "The solution was written with an AI coding agent (harness: Claude in the claude.ai app agent workspace, built on Claude Code; model `claude-opus-5-5`). "
         "That session's token usage is not exposed to the agent and is therefore not reported here; the "
-        "transcript is in the root `log.txt`. It does not contribute to the cost of producing `output.csv`.",
+        "transcript is the root `log.txt`; the raw agent trace is submitted separately as `agent-trace.zip`. It does not contribute to the cost of producing `output.csv`.",
         "",
     ]
     out = HERE / "usage_report.md"

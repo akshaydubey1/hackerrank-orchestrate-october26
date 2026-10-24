@@ -1,5 +1,9 @@
 # Ghost Data Still Exists — deletion-audit agent
 
+Author and maintainer: Akshay Awadh Dubey. Built for HackerRank Orchestrate (October 2026) with an AI coding
+agent; the development transcript is the repository's `log.txt` and AI/model usage is reported in
+`evaluation/usage_report.md`.
+
 Deterministic, evidence-first auditor. For each request it decides whether deletion was authorised,
 resolves the subject's current and historical identifiers, reconstructs every linked resource's state
 at `audit_at` from the evidence files, applies `deletion_rules.csv`, and emits the canonical
@@ -20,12 +24,23 @@ requests the rule-based intent classifier cannot decide (see `prompts/intent_fal
 
 ```bash
 python3 code/main.py                       # -> ./output.csv (518 rows), code/runs/output.{manifest.json,trace.jsonl}
-python3 code/main.py --no-cache            # force fresh OCR/PDF/SQL extraction
+python3 code/main.py --no-cache            # force fresh OCR/PDF/SQL extraction (the submitted run uses this)
 python3 code/main.py --requests dataset/sample_deletion_requests.csv --out /tmp/sample_pred.csv
-python3 code/evaluation/main.py            # full evaluation -> code/evaluation/evaluation_report.md (~1.5 min)
-python3 code/evaluation/main.py --quick    # samples + fixtures + verifier only
-python3 code/evaluation/make_usage_report.py   # usage_report.md from the last run's manifest
+python3 code/evaluation/main.py --quick    # samples + synthetic cases + verifier (~30 s)
+python3 code/evaluation/main.py            # + metamorphic, operational and mutation tests (several minutes)
+python3 code/evaluation/make_usage_report.py   # usage_report.md from the last code/main.py run's manifest
 ```
+
+Regenerate every artifact in one go (predictions with fresh extraction, request-batch invariance, the
+before/after comparison against a previous git revision, fail-first evidence, both reports):
+
+```bash
+python3 code/evaluation/reproduce.py --baseline f280a63   # needs a git checkout for the baseline step
+python3 code/evaluation/reproduce.py                      # from an extracted code.zip (baseline sections NOT RUN)
+```
+
+`code/evaluation/main.py` reads `code/runs/invariance/invariance.json`, `code/runs/compare.json` and
+`code/runs/failfirst/{base,new}.json` when they exist; a section whose input is missing is reported as NOT RUN.
 
 The run manifest records the code revision, parser version, SHA-256 of every input CSV and evidence file,
 extraction failures, cache hits/misses, timings, validation results and model usage.
@@ -44,43 +59,66 @@ code/
     identity.py              current snapshot + dated audit log -> emails, phones (digits), sha256 hashes, user refs
     activity.py              activity stream as *claims*: catalog links, repopulation edges, workflow submissions
     intent.py / llm.py       multilingual, negation-aware intent rules; optional validated model fallback
-    audit.py                 resource linking, per-replica state at audit_at, deletion-run attribution
+    audit.py                 strict cut-off view, per-request workflow correlation, prior-state reconstruction,
+                             per-replica state at audit_at, unresolved-item tracking
     policy.py                deletion_rules.csv -> category -> required treatment (explicit condition checks)
     planner.py               treatment -> findings / remediation / verification, canonical ordering
     validate.py              output contract checks (fields, phase/op/state, ordering, citations, round trip)
   evaluation/
     main.py                  sample metrics, fixtures, metamorphic, semantic, operational, mutation tests
     verifier.py              independent checker (does not import the predictor's decision code)
+    verifier_defects.py      labelled defects injected into gold answers (verifier must flag each)
     fixtures.py              synthetic world with hand-written expectations
+    invariance.py            reruns main.py on different request batches; every row must be unchanged
+    compare.py               before/after metrics and per-case root cause between two code versions
+    failfirst.py             runs today's synthetic cases against any code tree (fail-first evidence)
+    report.py                renders evaluation_report.md from the results of evaluation/main.py
+    reproduce.py             regenerates predictions, invariance, comparison and both reports
   prompts/intent_fallback.md
 ```
 
 ### How a case is decided
 
-1. **Authorisation.** Rules over multilingual stems (EN/ES/PT/FR/DE/IT/NL/JA/KO/ZH) with explicit-negation and
-   marketing-only patterns. Undecided text never authorises deletion (model fallback only if a key is set).
+1. **Authorisation.** Target-aware rules over multilingual stems (EN/ES/PT/FR/DE/IT/NL/JA/KO/ZH): negation first,
+   then full-scope phrases, then a deletion verb with the nearest scope noun in the same sentence (account /
+   profile / personal data authorise erasure; newsletter, old phone, address, card do not). Text the rules cannot
+   decide is UNDECIDED: it does not authorise deletion and is recorded as unresolved (model fallback only if a
+   key is set; that path is untested against a real provider).
 2. **Identity.** The request e-mail resolves to a `user_id` through current *or* historical e-mails. Join keys are
    exact: lower-cased e-mail, sha256 of every current/historical e-mail, digit-normalised phones, `user_NN`
-   references. Names are never a join key (the data contains same-name and `.jr` look-alike decoys).
+   references. Names are never a join key (the data contains same-name and look-alike decoys). OCR text is used
+   raw (no substitution table); a one-edit near-miss of an already linked owner's e-mail counts only as exposure.
 3. **Linking.** A resource belongs to the subject if any observation of it carries one of those keys (record
    fields, trace lookup keys, correlation keys, nested JSON, SQL JSON blobs, document text), if the data catalog
    links it, or if it is a downstream copy (search doc → source account, connector/restore → repopulated resource).
-   Two weaker, explicitly traced links exist for ids that no file ties to a person:
-   * *workflow correlation* — the deletion-worker account submission summarised by the request's
-     `reported_at`/`reported_status` (candidate sets + constraint propagation; queue-order tie-break; otherwise ambiguous);
-   * *deletion-run attribution* — a policy action on an otherwise unlinked record, accepted only when exactly one
-     request can own it.
-4. **State at `audit_at`.** Only observations captured by `audit_at` and observed inside
-   `[requested_at, audit_at]`. State is kept per replica and aggregated (a copy in any replica is present).
-   Absence needs positive proof: 404/NOT_FOUND, or a later complete capture that covers the subject.
+   Two weaker, explicitly traced links exist for ids that no file ties to a person. Both use **only this
+   request's fields and activity at or before `audit_at`** — never other requests, queue order or the sample file:
+   * *workflow correlation* — the deletion-worker account submission in [reported_at − 3 h, reported_at + 20 min]:
+     an evidence-linked one wins, else a unique unowned one with the matching result, else the only one; otherwise
+     the account is recorded as unresolved;
+   * *deletion-run attribution* — a policy action on an otherwise unlinked record, accepted only when every rival
+     run in the preceding hour provably belongs to another subject.
+4. **State at `audit_at` (strict cut-off).** An observation is admissible only if its file was captured by
+   `audit_at` **and** its embedded event time is at or before `audit_at`; catalog aliases count only after their
+   link time. The same view drives linking, ownership, state, policy and planning. Pre-request history carries
+   forward unless a later deletion run for the subject, a later success claim, or a stated expiry supersedes it
+   (then the state is *unknown*, not absent). State is kept per replica and aggregated (a copy in any replica is
+   present). Absence needs positive proof: 404/NOT_FOUND, or a later complete capture that covers the subject.
+   Restore capability needs an affirmative statement: explicit allow/deny wording, or the same recovery console
+   showing its archives' restores completing.
    Activity results are claims; a connector/restore that *repopulated* a resource after its last observation
    re-creates it. Missing search results, misses, partial logs and inventories never prove absence.
 5. **Policy.** Category from system + record kind (attachment vs conversation, hash-only contact, tombstone…),
    then `deletion_rules.csv` with explicit condition checks (retention/hold expiry, shared support context).
 6. **Plan.** Recreation paths first (disable flows, block restores), then delete/redact/anonymise, then the
    required final state of every relevant resource including retained ones. Ordering: phase → operation table
-   order → `system_id` → `resource_id`. COMPLETE requires at least one evidence-backed verification and contains
-   only cited verification steps; anything unproven is dropped and recorded in the trace.
+   order → `system_id` → `resource_id`. **COMPLETE requires every required final state to be proven** by
+   admissible evidence and contains only cited verification steps. If no violation is supported but some
+   required state is unproven (most often: the primary account cannot be attributed), the internal state is
+   UNCERTIFIED; it is serialised as `INCOMPLETE` carrying only the future verification checks (empty
+   `evidence_id`, no invented findings), and every blocking reason is kept in the trace. If every candidate
+   account in the report window is proven absent, the subject's account is absent whichever it is: the case can
+   be COMPLETE, but no account step is emitted because its id cannot be named without guessing.
 
 ### Tradeoffs
 
@@ -88,8 +126,9 @@ code/
   free, and auditable; the model is reserved for genuinely ambiguous request text.
 * **Precision over recall on weak links.** Ambiguous account/analytics attributions are left out rather than
   guessed (0 extra steps on the samples), at the cost of recall.
-* **Late exports.** Files exported after `audit_at` that describe in-window events may name retained records in the
-  future-work plan and may withdraw a capture-based absence proof; they are never cited and never create a finding.
+* **Strict cut-off.** Files captured after `audit_at` are not used at all, even when their embedded events are
+  earlier. Some sample answers rely on such files (see the organizer question in the evaluation report); the
+  strict reading is kept until the organizers clarify.
 
 Evidence is treated as untrusted data: nothing read from a file is executed or followed as an instruction;
 free text is only scanned for identifiers. The pipeline never modifies `dataset/`.

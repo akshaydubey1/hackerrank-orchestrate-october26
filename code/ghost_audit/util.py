@@ -86,3 +86,19 @@ def truthy(value) -> Optional[bool]:
     if lv in {"0", "false", "no", "n", "disabled", "denied", "blocked", "stopped"}:
         return False
     return None
+
+
+def code_fingerprint(code_dir) -> str:
+    """sha256 over the predictor's source, prompts and requirements (sorted relative paths + bytes).
+
+    Evaluation reports, caches and run outputs are excluded, so the same value is obtained from
+    the git checkout and from an extracted code.zip of the same revision."""
+    from pathlib import Path
+    code_dir = Path(code_dir)
+    h = hashlib.sha256()
+    files = sorted(list(code_dir.glob("ghost_audit/*.py")) + list(code_dir.glob("prompts/*"))
+                   + [code_dir / "main.py", code_dir / "requirements.txt"])
+    for p in files:
+        if p.is_file():
+            h.update(p.relative_to(code_dir).as_posix().encode() + b"\0" + p.read_bytes() + b"\0")
+    return h.hexdigest()

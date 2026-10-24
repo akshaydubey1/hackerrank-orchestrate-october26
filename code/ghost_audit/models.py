@@ -29,6 +29,7 @@ class Observation:
     flow_enabled: Optional[bool] = None
     restore_allowed: Optional[bool] = None
     retention_until: Optional[str] = None
+    expires_at: Optional[str] = None   # scheduled expiry stated by the source (e.g. export download links)
     record_type: Optional[str] = None  # explicit policy category if the source states one
     kind: Optional[str] = None         # sub-type hint: attachment, message, contact_index, hash_only ...
     shared_context: Optional[bool] = None

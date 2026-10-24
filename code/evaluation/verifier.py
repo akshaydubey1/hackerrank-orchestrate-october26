@@ -54,7 +54,7 @@ FLOW_ON = re.compile(r"enabled=(true|1)\b|result=ACTIVE|DATA_FLOW \| ACTIVE|Cont
                      r"'1', '(delivered|stopped)'|,'1','delivered'", re.I)
 FLOW_OFF = re.compile(r"enabled=(false|0)\b|result=DISABLED|DATA_FLOW \| DISABLED|stopped", re.I)
 RESTORE_ON = re.compile(r"restore_allowed=(true|1)\b|eligible=true|result=ACTIVE|BACKUP_ARCHIVE \| ACTIVE|"
-                        r"'1', '20|can still be restored", re.I)
+                        r"'1', '20|can still be restored|restored\W{1,4}compl", re.I)
 RESTORE_OFF = re.compile(r"restore_allowed=(false|0)\b|decision=deny|result=BLOCKED|BACKUP_ARCHIVE \| BLOCKED|"
                          r"'0', '20", re.I)
 
@@ -176,6 +176,54 @@ class Verifier:
         name = self.names.get(uid, "")
         return bool(name) and name.lower() in low
 
+    # -------------------------------------------------------------- occurrence index
+    TIME_RE = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)")
+    RID_RE = re.compile(r"\b(?:account|search|support|analytics|export|backup|data_flow|audit_record|tombstone|"
+                        r"legal_hold|marketing|object|email_delivery)_\d+\b")
+
+    def occurrences(self) -> dict:
+        """rid -> [(file_id, capture time, record time, normalised context)] over every evidence file."""
+        if hasattr(self, "_occ"):
+            return self._occ
+        occ = defaultdict(list)
+        for fid, meta in self.files.items():
+            cap = ts(meta["captured_at"])
+            t = self.text(fid)
+            for rid in sorted(set(self.RID_RE.findall(t))):
+                for ctx in self.contexts(fid, rid):
+                    first = ctx.strip().splitlines()[0] if ctx.strip() else ""
+                    m = re.match(r"^\s*-?\s*(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)", first)
+                    if not m:
+                        m = re.search(r"\"?(?:observed_at|recorded_at|updated_at)\"?[=:]\s*\"?(\d{4}-\d{2}-\d{2}T"
+                                      r"\d{2}:\d{2}:\d{2}Z)", ctx)
+                    rec_t = ts(m.group(1)) if m else cap
+                    occ[rid].append((fid, cap, rec_t, norm(ctx)))
+        for a in self.acts.values():
+            for rid in set(self.RID_RE.findall(a["resource_id"] + " " + a["details"])):
+                occ[rid].append((a["activity_id"], ts(a["event_time"]), ts(a["event_time"]),
+                                 a["event_type"] + " " + a["details"]))
+        self._occ = occ
+        return occ
+
+    def discoverable(self, rid: str, cut) -> bool:
+        return any(cap <= cut and (rt is None or rt <= cut) for _, cap, rt, _ in self.occurrences().get(rid, []))
+
+    def users_named(self, ctx: str) -> set:
+        low = ctx.lower()
+        out = set(re.findall(r"\buser_\d+\b", low))
+        for e in re.findall(r"[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}", low):
+            out |= self.email_user.get(e, set())
+        return out
+
+    @staticmethod
+    def canonical_order_ok(steps: list) -> bool:
+        order = ["REPORT_REMAINING_RECORD", "REPORT_EXPOSED_PII", "REPORT_ACTIVE_DATA_FLOW", "REPORT_RESTORE_RISK",
+                 "DISABLE_DATA_FLOW", "BLOCK_RESTORE", "DELETE_RECORD", "REDACT_RECORD", "ANONYMIZE_RECORD",
+                 "VERIFY_RECORD_ABSENT", "VERIFY_RECORD_PRESENT", "VERIFY_RECORD_REDACTED", "VERIFY_RECORD_ANONYMIZED",
+                 "VERIFY_DATA_FLOW_DISABLED", "VERIFY_RESTORE_BLOCKED"]
+        keys = [(order.index(s["operation"]), s["system_id"], s["resource_id"]) for s in steps]
+        return keys == sorted(keys) and [s["step_no"] for s in steps] == list(range(1, len(steps) + 1))
+
     # -------------------------------------------------------------- checks
     def verify(self, requests: list, predictions: dict) -> dict:
         report = defaultdict(list)
@@ -195,6 +243,21 @@ class Verifier:
             phases = [s["phase"] for s in steps]
             if status == "COMPLETE" and any(p != "VERIFICATION" for p in phases):
                 report["complete_with_findings"].append(cid)
+            if status == "COMPLETE" and (not steps or any(not s["evidence_id"] for s in steps)):
+                report["complete_with_unsupported_verification"].append(cid)
+            if status == "INCOMPLETE" and not steps:
+                report["incomplete_empty_plan"].append(cid)
+            elif status == "INCOMPLETE" and "FINDING" not in phases:
+                # verification-only plan: no supported violation, but completion not proven either
+                report["incomplete_without_findings"].append(cid)
+            if steps and not self.canonical_order_ok(steps):
+                report["noncanonical_order_or_numbering"].append(cid)
+            planned = {s["resource_id"] for s in steps}
+            for rid in sorted(planned):
+                if not self.discoverable(rid, audit_at):
+                    report["resource_not_discoverable_by_audit_at"].append(f"{cid}:{rid}")
+            if uid:
+                self._coverage_checks(cid, uid, status, steps, req_at, audit_at, report, stats)
             rem = [s for s in steps if s["phase"] == "REMEDIATION"]
             seen_record_op = False
             for s in rem:
@@ -250,13 +313,25 @@ class Verifier:
                 else:
                     ctxs = []
                 if not ctxs:
-                    # absence proven by a complete capture that covers the subject
+                    # absence proven by a complete capture that covers the subject: a replica dump
+                    # (topology header), or a JSON bundle holding exactly one capture of that collection
                     if op == "VERIFY_RECORD_ABSENT" and ev.startswith("evidence_"):
                         full = self.text(ev)
-                        if ("Database topology" in full or "snapshots" in full) and \
-                                (uid and (self.subject_in(full, uid) or "customer_profiles" in full)):
+                        ok_capture = False
+                        if "Database topology" in full and "snapshot_scope" not in full:
+                            ok_capture = True
+                        elif '"snapshots"' in full:
+                            stores = re.findall(r'"data_store":\s*"([a-z_]+)",\s*"collection":\s*"([a-z_]+)"', full)
+                            sysname = next((p for p in ("account_service", "search_service", "analytics_platform",
+                                                        "support_platform", "export_service", "identity_service")
+                                            if rid.split("_")[0] in p), None)
+                            same = [x for x in stores if x[0] == sysname]
+                            ok_capture = len(same) == 1 and bool(uid and self.subject_in(full, uid))
+                        if ok_capture:
                             stats["absence_by_capture"] += 1
                             continue
+                        report["absence_from_partial_capture"].append(f"{cid}:{rid}:{ev}")
+                        continue
                     # catalog alias (document cites a business reference rather than the id)
                     alias_ok = False
                     for a in self.acts.values():
@@ -293,15 +368,57 @@ class Verifier:
                     report["state_not_supported_by_citation"].append(f"{cid}:{rid}:{op}:{ev}")
                 else:
                     stats["supported_cited_steps"] += 1
+                named = self.users_named(ctx)
+                if uid and named and uid not in named and not self.subject_in(ctx, uid):
+                    report["context_names_other_subject"].append(f"{cid}:{rid}:{ev}")
                 # subject link: the cited context should name the subject (or the catalog does)
                 if uid and not self.subject_in(ctx, uid):
                     linked = any(a["event_type"] == "LINK_RESOURCE_IDENTITY" and a["resource_id"] == rid
                                  and uid in a["details"] for a in self.acts.values())
                     if not linked:
                         stats["cited_without_subject_identifier"] += 1
-            if status == "COMPLETE":
-                self._false_complete_scan(cid, uid, req_at, audit_at, steps, report)
         return {"issues": {k: v for k, v in report.items()}, "stats": dict(stats)}
+
+    def _coverage_checks(self, cid, uid, status, steps, req_at, audit_at, report, stats):
+        """What a correct answer must contain, derived independently from admissible raw text."""
+        ops = defaultdict(set)
+        for s_ in steps:
+            ops[s_["resource_id"]].add(s_["operation"])
+        latest = {}
+        for rid, occ in self.occurrences().items():
+            if not rid.startswith(("audit_record_", "legal_hold_", "data_flow_", "backup_", "account_")):
+                continue
+            for fid, cap, rt, ctx in occ:
+                if cap > audit_at or (rt and rt > audit_at) or not fid.startswith("evidence_"):
+                    continue
+                if not self.subject_in(ctx, uid):
+                    continue
+                if rid not in latest or (rt or cap) > latest[rid][0]:
+                    latest[rid] = (rt or cap, fid, ctx)
+        for rid, (t, fid, ctx) in latest.items():
+            if rid.startswith(("audit_record_", "legal_hold_")):
+                dates = [ts(d) for d in re.findall(r"(?:retention_until|retained_until)=(\d{4}-\d{2}-\d{2}T[\d:]+Z)", ctx)]
+                if dates and all(d < audit_at for d in dates):
+                    continue
+                if "VERIFY_RECORD_PRESENT" not in ops.get(rid, set()):
+                    report["missing_retained_record"].append(f"{cid}:{rid}:{fid}")
+            elif rid.startswith(("data_flow_", "backup_")):
+                if rid.startswith("data_flow_"):
+                    explicit = re.findall(r"\benabled=(true|false|1|0)\b", ctx, re.I)
+                    on = explicit[-1].lower() in ("true", "1") if explicit else bool(FLOW_ON.search(ctx)) and not FLOW_OFF.search(ctx)
+                else:
+                    explicit = re.findall(r"\brestore_allowed=(true|false|1|0)\b", ctx, re.I)
+                    on = explicit[-1].lower() in ("true", "1") if explicit else bool(RESTORE_ON.search(ctx)) and not RESTORE_OFF.search(ctx)
+                later_claim = any(a["resource_id"] == rid and a["source_system"] == "deletion_worker"
+                                  and t < ts(a["event_time"]) <= audit_at for a in self.acts.values())
+                if on and not later_claim and t >= req_at and not (ops.get(rid, set()) & {"REPORT_ACTIVE_DATA_FLOW",
+                                                                                          "REPORT_RESTORE_RISK"}):
+                    report["missing_recreation_risk"].append(f"{cid}:{rid}:{fid}")
+            elif rid.startswith("account_") and status == "COMPLETE":
+                if not any(s_["resource_id"] == rid and s_["evidence_id"] for s_ in steps):
+                    report["complete_without_account_proof"].append(f"{cid}:{rid}:{fid}")
+        if status == "COMPLETE" and not any(s_["system_id"] == "account_service" for s_ in steps):
+            stats["complete_account_not_verified"] += 1
 
     def _false_complete_scan(self, cid, uid, req_at, audit_at, steps, report):
         """Independent presence sweep: any admissible line naming the subject next to a positive

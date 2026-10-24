@@ -22,6 +22,8 @@ class EvidenceFile:
     error: str = ""
     n_observations: int = 0
     text: str = ""  # extracted text for PDFs / OCR (kept for audit and identifier search)
+    facts: list = field(default_factory=list)  # structured facts without resource ids (e.g. legal register rows)
+    warnings: list = field(default_factory=list)
 
 
 @dataclass
@@ -76,6 +78,7 @@ def load_evidence(dataset_dir: Path, cache_dir: Path | None = None) -> EvidenceS
             payload = json.loads(cpath.read_text(encoding="utf-8"))
             obs = [Observation.from_dict(d) for d in payload["observations"]]
             ef.text = payload.get("text", "")
+            ef.warnings = payload.get("warnings", [])
             store.cache_hits += 1
         else:
             try:
@@ -89,12 +92,23 @@ def load_evidence(dataset_dir: Path, cache_dir: Path | None = None) -> EvidenceS
                 store.failures.append((ef.file_id, ef.error))
                 continue
             store.cache_misses += 1
+            ef.warnings = parsers.WARNINGS.pop(ef.file_id, [])
             if cpath:
-                cpath.write_text(json.dumps({"observations": [o.to_dict() for o in obs], "text": ef.text}),
-                                 encoding="utf-8")
-        ef.status = "ok" if obs else "empty"
-        if not obs:
-            store.failures.append((ef.file_id, "no observations extracted"))
+                cpath.write_text(json.dumps({"observations": [o.to_dict() for o in obs], "text": ef.text,
+                                             "warnings": ef.warnings}), encoding="utf-8")
+        if ef.text:
+            ef.facts = parsers.legal_facts(ef.text)
+        if ef.warnings:
+            store.failures.append((ef.file_id, "partial extraction: " + "; ".join(ef.warnings[:3])))
+        if obs:
+            ef.status = "ok"
+        elif ef.facts:
+            ef.status = "facts-only"     # extracted, but the facts name no resource id
+        elif ef.text:
+            ef.status = "no-direct-facts"  # text extracted; usable only via catalog aliases found in it
+        else:
+            ef.status = "empty"
+            store.failures.append((ef.file_id, "no text or observations extracted"))
         ef.n_observations = len(obs)
         store.observations.extend(obs)
     return store

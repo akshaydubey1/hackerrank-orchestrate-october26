@@ -23,7 +23,7 @@ sys.path.insert(0, str(HERE))
 from ghost_audit import parsers  # noqa: E402
 from ghost_audit.llm import USAGE  # noqa: E402
 from ghost_audit.pipeline import Engine, read_requests, write_output  # noqa: E402
-from ghost_audit.util import sha256_file  # noqa: E402
+from ghost_audit.util import code_fingerprint, sha256_file  # noqa: E402
 
 
 def repo_root() -> Path:
@@ -57,15 +57,6 @@ def main(argv=None) -> int:
     t0 = time.time()
     engine = Engine(dataset, None if args.no_cache else Path(args.cache_dir))
     requests = read_requests(req_path)
-    # account correlation needs every request in the dataset (global one-to-one matching);
-    # only request fields are read -- never an answer file
-    pools = [read_requests(dataset / "deletion_requests.csv")]
-    if (dataset / "sample_deletion_requests.csv").exists():
-        pools.append(read_requests(dataset / "sample_deletion_requests.csv"))
-    if req_path.resolve() not in {(dataset / "deletion_requests.csv").resolve(),
-                                  (dataset / "sample_deletion_requests.csv").resolve()}:
-        pools.append(requests)
-    engine.prepare(pools)
     results = engine.run(requests)
     issues = write_output(results, Path(args.out), [r["case_id"] for r in requests])
     errors = [e for e in issues if "WARNING:" not in e]
@@ -77,19 +68,23 @@ def main(argv=None) -> int:
     stem = Path(args.out).stem
     with open(trace_dir / f"{stem}.trace.jsonl", "w", encoding="utf-8") as fh:
         for r in results:
-            fh.write(json.dumps({"case_id": r.case_id, "status": r.status, "trace": r.trace}, default=str) + "\n")
+            fh.write(json.dumps({"case_id": r.case_id, "status": r.status, "internal_status": r.internal_status,
+                                 "unresolved": r.unresolved, "trace": r.trace}, default=str) + "\n")
     status_counts = {}
     for r in results:
         status_counts[r.status] = status_counts.get(r.status, 0) + 1
     manifest = {
         "code_revision": git_revision(root),
+        "code_fingerprint": code_fingerprint(HERE),
         "parser_version": parsers.PARSER_VERSION,
         "requests_file": str(req_path.relative_to(root)) if req_path.is_relative_to(root) else str(req_path),
         "requests_sha256": sha256_file(req_path),
         "inputs_sha256": {p.name: sha256_file(p) for p in sorted(dataset.glob("*.csv"))},
         "evidence_files": {fid: {"sha256": ef.sha256, "status": ef.status, "observations": ef.n_observations,
-                                 "error": ef.error} for fid, ef in engine.store.files.items()},
+                                 "facts": len(ef.facts), "warnings": ef.warnings, "error": ef.error}
+                           for fid, ef in engine.store.files.items()},
         "extraction_failures": engine.store.failures,
+        "file_types": {fid: ef.path.suffix.lower() for fid, ef in engine.store.files.items()},
         "cache": {"hits": engine.store.cache_hits, "misses": engine.store.cache_misses,
                   "enabled": not args.no_cache},
         "n_requests": len(results),
@@ -99,6 +94,12 @@ def main(argv=None) -> int:
         "seconds_total": round(elapsed, 2),
         "seconds_loading": round(engine.load_seconds, 2),
         "model_usage": USAGE.summary(),
+        "internal_status_counts": dict(sorted(
+            {k: sum(1 for r in results if r.internal_status == k) for k in {r.internal_status for r in results}}.items())),
+        "cases_with_unresolved_items": sum(1 for r in results if r.unresolved),
+        "intent_decisions": {f"{src}:{lab}": n for (src, lab), n in sorted(
+            __import__("collections").Counter((r.trace["intent"]["source"], r.trace["intent"]["label"])
+                                              for r in results).items())},
     }
     (trace_dir / f"{stem}.manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(f"wrote {args.out}: {len(results)} rows {status_counts}; validation errors: {len(errors)}; "

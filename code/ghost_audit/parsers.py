@@ -18,7 +18,8 @@ from .models import Observation
 from .util import (EMAIL_RE, HEX64_RE, RESOURCE_RE, USER_REF_RE, clean,
                    truthy)
 
-PARSER_VERSION = "parsers-v10"
+PARSER_VERSION = "parsers-v13"
+WARNINGS: dict = {}  # evidence_id -> partial-extraction problems (reported by ingest, never swallowed)
 
 # ---------------------------------------------------------------------------
 # Resource-id helpers
@@ -137,8 +138,10 @@ def interpret_record(rec: dict, *, system: str, evidence_id: str, captured_at: s
         if status in {"DELETED", "PURGED"}:
             obs.exists = False
         obs.note = status
-    if system == "export_service" and rec.get("download_available") is not None:
-        obs.note = "download_available=%s" % rec.get("download_available")
+    if system == "export_service":
+        obs.expires_at = clean(rec.get("expires_at"))
+        if rec.get("download_available") is not None:
+            obs.note = "download_available=%s" % rec.get("download_available")
     return obs
 
 
@@ -291,15 +294,17 @@ def parse_sql(path: Path, evidence_id: str, captured_at: str) -> list:
     con.row_factory = sqlite3.Row
     try:
         con.executescript(sql)
-    except sqlite3.Error:
-        # retry statement by statement so one malformed row does not lose the file
+    except sqlite3.Error as exc:
+        # retry statement by statement so one malformed row does not lose the file; every failed
+        # statement is reported (WARNINGS) and surfaces as a partial-extraction failure in ingest
+        WARNINGS.setdefault(evidence_id, []).append(f"sqlite script failed ({exc}); statement-by-statement retry")
         con = sqlite3.connect(":memory:")
         con.row_factory = sqlite3.Row
-        for stmt in sql.split(";\n"):
+        for n, stmt in enumerate(sql.split(";\n"), 1):
             try:
                 con.execute(stmt)
-            except sqlite3.Error:
-                pass
+            except sqlite3.Error as e2:
+                WARNINGS[evidence_id].append(f"statement {n} failed: {e2}")
     out: list = []
     tables = [r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")]
     scope = {}
@@ -604,7 +609,6 @@ def ocr_text(path: Path) -> str:
         return ""
 
 
-OCR_FIXES = [(re.compile(r"(?<=[a-z])t(?=\d{3})"), "1")]  # areedt433 -> areed1433 style slips
 
 
 def document_facts(text: str, evidence_id: str, captured_at: str, kind: str) -> list:
@@ -617,10 +621,14 @@ def document_facts(text: str, evidence_id: str, captured_at: str, kind: str) -> 
     out = []
     lines = text.splitlines()
     ids_all = _ids_from_text(text)
+    # a screen explicitly filtered to one subject ("Subject filter: user_03") shows only that
+    # subject's records; a search box query is NOT such a filter (results can be look-alikes)
+    sf = re.search(r"subject filter:\s*(user_\d+)", text, re.I)
+    page_subject = [sf.group(1)] if sf else []
     for n, line in enumerate(lines, 1):
         for rid in sorted(set(m.group(0) for m in RESOURCE_RE.finditer(line))):
             # documents describe one subject; screens put unrelated rows side by side
-            near = ids_all if kind == "pdf" else _ids_from_text(line)
+            near = ids_all if kind == "pdf" else _ids_from_text(line) + page_subject
             obs = Observation(evidence_id=evidence_id, location=f"{kind} line {n}", captured_at=captured_at,
                               observed_at=captured_at, system=system_for(rid, "unknown"), resource_id=rid,
                               exists=True, identifiers=list(dict.fromkeys(near)), note=kind)
@@ -631,13 +639,31 @@ def document_facts(text: str, evidence_id: str, captured_at: str, kind: str) -> 
     return out
 
 
+LEGAL_ROW_RE = re.compile(r"(ORD-\d+)\s*\|\s*(user_\d+)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*[^|]+\|\s*"
+                          r"Retain until\s+(\d{1,2} \w{3} \d{4})")
+
+
+def legal_facts(text: str) -> list:
+    """Rows of a retention / legal-hold register: order, subject, reason, retain-until date.
+    The register names orders and subjects but no resource id, so these are recorded as facts
+    (reported, and available to the auditor) rather than turned into plan steps."""
+    from datetime import datetime
+    out = []
+    for m in LEGAL_ROW_RE.finditer(text):
+        try:
+            until = datetime.strptime(m.group(5), "%d %b %Y").strftime("%Y-%m-%dT23:59:59Z")
+        except ValueError:
+            until = None
+        out.append({"order_reference": m.group(1), "subject_reference": m.group(2), "reason": m.group(3).strip(),
+                    "date": m.group(4).strip(), "retain_until": until})
+    return out
+
+
 def parse_pdf(path: Path, evidence_id: str, captured_at: str) -> tuple:
     text = pdf_text(path)
     return document_facts(text, evidence_id, captured_at, "pdf"), text
 
 
 def parse_image(path: Path, evidence_id: str, captured_at: str) -> tuple:
-    text = ocr_text(path)
-    for rx, rep in OCR_FIXES:
-        text = rx.sub(rep, text)
+    text = ocr_text(path)  # raw OCR text is kept as-is; no substitutions
     return document_facts(text, evidence_id, captured_at, "ocr"), text
