@@ -1,0 +1,6 @@
+# Python >= 3.10 standard library covers the pipeline (csv, json, sqlite3, re, urllib).
+# System tools: tesseract (OCR for screenshots) and pdftotext (poppler-utils) for PDFs.
+pypdf>=4.0          # fallback PDF text extraction when pdftotext is unavailable
+# evaluation only (synthetic PDF/PNG fixtures):
+reportlab>=4.0
+pillow>=10.0
