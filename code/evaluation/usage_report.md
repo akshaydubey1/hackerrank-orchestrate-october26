@@ -1,6 +1,6 @@
 # Usage report — final full-dataset run
 
-_Source: `output.manifest.json` written by the run that produced the submitted `output.csv` (git revision at run time `a3633c93d5778832b48953a60236a9491d2ab615+local-changes`, code fingerprint `173e1b824665f9b5e2fd804fb4e5a458bf37c0e73b6902a9442f4f222bafd02a`, parser `parsers-v13`)._
+_Source: `output.manifest.json` written by the run that produced the submitted `output.csv` (git revision at run time `62eb25d116ff35f537bb85b567527006420fe39b+local-changes`, code fingerprint `ff5836cd08d14b85d2387bcd467cff2182f80f47519171a7b77b9e29a136d981`, parser `parsers-v13`)._
 
 ## Summary
 
@@ -16,7 +16,7 @@ _Source: `output.manifest.json` written by the run that produced the submitted `
 | Average tokens per request | 0.00 |
 | Estimated total cost | $0.000000 |
 | Estimated cost per request | $0.00000000 |
-| Wall-clock time | 16.07 s total, of which 13.84 s evidence loading |
+| Wall-clock time | 16.19 s total, of which 13.6 s evidence loading |
 | Extraction cache | disabled (fresh extraction); hits 0, misses 94 (key = content sha256 + parser version + file id + capture time) |
 | Intent decisions (source:label) | rules:ACCESS_OR_EXPORT 4, rules:CORRECTION 3, rules:DELETION 508, rules:MARKETING_OPT_OUT 1, rules:OTHER 2 |
 | Requests eligible for the model fallback (rules UNDECIDED) | 0 |

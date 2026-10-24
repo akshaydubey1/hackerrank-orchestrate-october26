@@ -97,13 +97,14 @@ def build_rows(root: Path, n: int, seed: int = 17) -> list:
     for i in range(n):
         kind = "gap" if i % 3 else "decoy"
         base = 9500 + 10 * i
-        rows = [(f"1  Password changed   user_{base}   Valid   audit_record_{base + 1}", 28, (0, 0, 0)),
+        big = rnd.choice([14, 15, 16, 18])   # realistic UI sizes; one row small and low-contrast
+        rows = [(f"1  Password changed   user_{base}   Valid   audit_record_{base + 1}", big, (0, 0, 0)),
                 (f"2  Session revoked   user_{base}   Valid   audit_record_{base + 2}", rnd.choice([9, 10, 11]), (90, 90, 90)),
-                (f"3  Login new device   user_{base}   Valid   audit_record_{base + 3}", 28, (0, 0, 0))]
+                (f"3  Login new device   user_{base}   Valid   audit_record_{base + 3}", big, (0, 0, 0))]
         drawn = [f"audit_record_{base + k}" for k in (1, 2, 3)]
         declared = 3 if kind == "gap" else 4
         p = root / f"rows_{i:03d}.png"
-        p.write_bytes(_png_rows([(f"Security events   Updated moments ago - {declared} records", 28, (0, 0, 0))] + rows))
+        p.write_bytes(_png_rows([(f"Security events   Updated moments ago - {declared} records", big, (0, 0, 0))] + rows))
         cases.append({"id": i, "path": str(p), "kind": kind, "drawn": drawn, "declared": declared})
     return cases
 
@@ -134,8 +135,10 @@ def evaluate_rows(cases: list, strategy: str, cache: Path) -> dict:
                 recovered += len(good)
                 false_rows += len(o.new_ids) - len(good)
     u1 = llm.USAGE.summary()
+    # rows (not screens) that the default OCR pass missed on screens whose count can be completed;
+    # same unit as rows_recovered
     missed_base = sum(1 for c in cases if c["kind"] == "gap"
-                      and not all(r in files[f"rows_{c['id']}"].text.lower() for r in c["drawn"]))
+                      for r in c["drawn"] if r not in files[f"rows_{c['id']}"].text.lower())
     return {**res, "status": "RUN", "problems_found": problems, "rows_missed_by_default_ocr": missed_base,
             "rows_recovered": recovered, "false_rows_accepted": false_rows, "re_extractions": actions,
             "seconds": round(time.time() - t0, 1), "model_calls": u1["calls"] - u0["calls"],

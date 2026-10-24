@@ -71,37 +71,87 @@ def _investigation_cases():
 
 
 def _row_gap_cases():
+    """Row-gap acceptance. Each case states the screen text the default OCR produced (`base`) and what a
+    re-extraction returned (`reread`); the expectation follows from the screen alone."""
+    from types import SimpleNamespace
     from ghost_audit import investigate as inv
     out = []
-    # U9/U10/U11 row-gap problems: the screen's declared record count is the label
-    from types import SimpleNamespace
-    base = "Events  Updated moments ago - 3 records\nuser_9 Valid audit_record_1\nuser_9 Valid audit_record_3\n"
-    store = SimpleNamespace(files={"img": SimpleNamespace(path=Path("x.png"), text=base, captured_at="2026-01-01T00:00:00Z",
-                                                          verified_identifiers=set(), investigations=[], n_observations=0)},
-                            observations=[])
-    gaps = inv.find_row_gaps(store)
-    saved = inv._reextract
-    try:
-        inv._reextract = lambda p, a, c: ("3 records\nuser_9 Valid audit_record_2\n", True)
-        ok = inv.investigate(gaps, inv.FixedLadder())
-        inv._reextract = lambda p, a, c: ("user_9 audit_record_2\nuser_9 audit_record_7\n", True)
-        over = inv.investigate(gaps, inv.FixedLadder())
-    finally:
-        inv._reextract = saved
-    out.append(("U9 row gap: re-read completing the declared count is accepted",
-                len(gaps) == 1 and ok[0].verified and ok[0].new_ids == ["audit_record_2"],
-                f"gaps={len(gaps)}, verified={ok[0].verified if ok else None}"))
-    out.append(("U10 row gap: re-read exceeding the declared count is rejected", over and not over[0].verified,
-                f"verified={over[0].verified if over else None}, attempts={len(over[0].attempts) if over else 0}"))
-    inv.apply(store, ok)
-    new_obs = [o for o in store.observations if o.resource_id == "audit_record_2"]
+
+    def screen(base):
+        return SimpleNamespace(files={"img": SimpleNamespace(path=Path("x.png"), text=base, captured_at="2026-01-01T00:00:00Z",
+                                                             verified_identifiers=set(), investigations=[],
+                                                             n_observations=0)}, observations=[])
+
+    def attempt(base, reread):
+        st = screen(base)
+        gaps = inv.find_row_gaps(st)
+        saved = inv._reextract
+        try:
+            inv._reextract = lambda p, a, c: (reread, True)
+            outs = inv.investigate(gaps, inv.FixedLadder())
+        finally:
+            inv._reextract = saved
+        return st, gaps, outs
+
+    head = "events  updated moments ago - 3 records\n"
+    r1, r2, r3 = ("user_9 valid audit_record_1", "user_9 valid audit_record_2", "user_9 valid audit_record_3")
+    full = head + "\n".join([r1, r2, r3]) + "\n"
+    base = head + r1 + "\n" + r3 + "\n"
+    st, gaps, outs = attempt(base, full)
+    out.append(("U9 row gap: complete re-read restating the count is accepted",
+                len(gaps) == 1 and outs[0].verified and outs[0].new_ids == ["audit_record_2"], f"gaps={len(gaps)}"))
+    _, _, o = attempt(base, full + "user_9 valid audit_record_7\n")
+    out.append(("U10 row gap: re-read exceeding the declared count is rejected", o and not o[0].verified,
+                o[0].attempts[-1].get("reason", "") if o else "no problem"))
+    inv.apply(st, outs)
+    obs = [x for x in st.observations if x.resource_id == "audit_record_2"]
     out.append(("U11 row gap: accepted row becomes an ordinary observation from its own line",
-                len(new_obs) == 1 and "user_9" in new_obs[0].identifiers and new_obs[0].location.startswith("re-extraction"),
-                f"{[(o.resource_id, o.identifiers, o.location) for o in new_obs]}"))
+                len(obs) == 1 and "user_9" in obs[0].identifiers and obs[0].location.startswith("re-extraction"),
+                f"{[(x.resource_id, x.identifiers) for x in obs]}"))
+    # U12 two tables (two different counts) -> the count is not bound to one table -> no problem opened
+    two = "orders - 2 records\nuser_9 order_1\nevents - 3 records\n" + r1 + "\n" + r3 + "\n"
+    out.append(("U12 two count statements (two tables): no gap is opened", not inv.find_row_gaps(screen(two)), ""))
+    # U13 ids of another type elsewhere on the page are not counted, and cannot complete the count
+    base13 = base + "backup_5 restore policy panel\n"
+    _, g13, o13 = attempt(base13, head + r1 + "\n" + r3 + "\nbackup_5 user_9 panel\nbackup_6 user_9 panel\n")
+    out.append(("U13 unrelated id types neither count nor complete the table",
+                len(g13) == 1 and getattr(g13[0], "table_type", None) == "audit_record" and not o13[0].verified,
+                o13[0].attempts[-1].get("reason", "") if o13 else "no problem"))
+    # U14 pagination: the count is a total, not the rows on screen
+    pag = "events - showing 1-2 of 3 records\n" + r1 + "\n" + r3 + "\n"
+    out.append(("U14 paginated count: no gap is opened", not inv.find_row_gaps(screen(pag)), ""))
+    # U15 a row repeated in a detail panel counts once
+    dup = base + "audit_record_1 - raw event\n"
+    g15 = inv.find_row_gaps(screen(dup))
+    out.append(("U15 duplicate id (detail panel) counts once", len(g15) == 1 and len(g15[0].known_ids) == 2,
+                f"{g15[0].known_ids if g15 else None}"))
+    # U16 the re-read reads a different count -> the count is not confirmed
+    _, _, o16 = attempt(base, full.replace("3 records", "4 records"))
+    out.append(("U16 re-read with a different count is rejected", o16 and not o16[0].verified,
+                o16[0].attempts[-1].get("reason", "") if o16 else ""))
+    # U17 the re-read drops an original row, yet the union would reach the count
+    _, _, o17 = attempt(base, head + r1 + "\n" + r2 + "\nuser_9 valid audit_record_4\n")
+    out.append(("U17 re-read dropping an original row is rejected", o17 and not o17[0].verified,
+                o17[0].attempts[-1].get("reason", "") if o17 else ""))
+    # U18 replacement: an original id misread as another id plus one new row exactly meets the count
+    _, _, o18 = attempt(base, head + r1 + "\nuser_9 valid audit_record_8\n" + r2 + "\n")
+    out.append(("U18 replacement id that happens to satisfy the count is rejected", o18 and not o18[0].verified,
+                o18[0].attempts[-1].get("reason", "") if o18 else ""))
+    # U19 a recovered row with no owner on its own line is not accepted
+    _, _, o19 = attempt(base, head + r1 + "\nvalid audit_record_2\n" + r3 + "\n")
+    out.append(("U19 recovered row without an owner identifier is rejected", o19 and not o19[0].verified,
+                o19[0].attempts[-1].get("reason", "") if o19 else ""))
+    # U20 completion adds presence only, with the file's capture time; nothing is inferred absent
+    st20, _, o20 = attempt(base, full)
+    inv.apply(st20, o20)
+    out.append(("U20 count completion adds presence only, stamped with the file's capture time",
+                st20.observations and all(x.exists is not False and x.captured_at == "2026-01-01T00:00:00Z"
+                                          for x in st20.observations),
+                f"{[(x.resource_id, x.exists, x.captured_at) for x in st20.observations]}"))
     return out
 
 
-GROUPS = [("U1 U2 U3 U8", _planner_cases, 4), ("U4 U5 U6 U7", _investigation_cases, 4), ("U9 U10 U11", _row_gap_cases, 3)]
+GROUPS = [("U1 U2 U3 U8", _planner_cases, 4), ("U4 U5 U6 U7", _investigation_cases, 4), ("U9 U10 U11 U12 U13 U14 U15 U16 U17 U18 U19 U20", _row_gap_cases, 12)]
 
 
 def run(code_dir=None) -> list:

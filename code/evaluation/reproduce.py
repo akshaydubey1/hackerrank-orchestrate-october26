@@ -11,7 +11,8 @@ Steps
      failfirst.py on this code ; investigate_cases.py -> evaluation/case_investigation.md
   4. evaluation/main.py                -> code/evaluation/evaluation_report.md
   5. evaluation/make_usage_report.py   -> code/evaluation/usage_report.md
-  6. evaluation/gate_tests.py          -> code/runs/gate_tests.json (self-tests of the gate)
+  6. evaluation/gate_tests.py          -> code/runs/gate_tests.json (self-tests of the gate); with --previous,
+     the same self-tests against that revision's gate -> code/runs/failfirst/gate_tests_prev.json
   7. evaluation/acceptance.py --mode release -> code/evaluation/acceptance_report.md (both gate results)
 Step 3 needs a git checkout (it reads the baseline revision from git); it is skipped otherwise and
 the report then marks the before/after and fail-first sections NOT RUN.
@@ -76,6 +77,14 @@ def main(argv=None):
     sh(*cmd)
     sh(py, HERE / "make_usage_report.py")
     sh(py, HERE / "gate_tests.py", check=False)
+    if a.previous:  # the same gate self-tests against the previous revision's gate (fail-first for the gate)
+        old = HERE / "_acceptance_previous.py"
+        old.write_bytes(subprocess.run(["git", "-C", str(ROOT), "show", f"{a.previous}:code/evaluation/acceptance.py"],
+                                       check=True, capture_output=True).stdout)
+        try:
+            sh(py, HERE / "gate_tests.py", "--acceptance", old, "--out", ff / "gate_tests_prev.json", check=False)
+        finally:
+            old.unlink()
     sh(py, HERE / "acceptance.py", "--mode", "release", "--out", HERE / "acceptance_report.md", check=False)
 
 

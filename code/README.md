@@ -35,22 +35,40 @@ Regenerate every artifact in one go (predictions with fresh extraction, request-
 before/after comparison against a previous git revision, fail-first evidence, both reports):
 
 ```bash
-python3 code/evaluation/reproduce.py --baseline f280a63 --previous a3633c9   # needs a git checkout
+python3 code/evaluation/reproduce.py --baseline f280a63 --previous 62eb25d   # needs a git checkout
 python3 code/evaluation/reproduce.py                      # from an extracted code.zip (baseline sections NOT RUN)
 ```
 
 `code/evaluation/main.py` reads `code/runs/invariance/invariance.json`, `code/runs/compare_{base,prev}.json` and
 `code/runs/failfirst/*.json` when they exist; a section whose input is missing is reported as NOT RUN.
-`code/evaluation/acceptance.py` turns the results into `acceptance_report.md` with two gates:
-`--mode dev` (regression gate: fails on any unexpected change, stale or foreign results, empty or malformed suites,
-missing test identities) and `--mode release` (strict: additionally fails on any recorded exception or NOT RUN in
-the required areas). Recorded exceptions with rationale and exact case lists live in
-`code/evaluation/known_exceptions.json`; an exception documents uncertainty and never establishes correctness.
-`code/evaluation/gate_tests.py` tests the gate itself (empty lists, omitted suites, stale fingerprints, malformed
-files, missing identities). Raw-evidence reviews of six unresolved cases and the organiser message draft are in
-`code/evaluation/case_reviews.md`. `code/evaluation/investigate_cases.py` writes the case-level
-evidence matrix and conflict reproductions to `case_investigation.md`. CI (`.github/workflows/checks.yml`) runs the
-execution job, the full reproduction and the acceptance gate.
+`code/evaluation/acceptance.py` turns the results into `acceptance_report.md` with three separate verdicts:
+
+* `--mode dev` — regression gate. It fails on any unexpected change and on stale results: prediction code,
+  evaluation code, evidence-file contents (a digest of every dataset file) and configuration are all checked.
+  It also compares every suite with the explicit registry `code/evaluation/test_registry.json`; a missing,
+  duplicate, unexpected or malformed identity fails, and so do empty suites, empty or incomplete fail-first
+  results, and incomplete batch-invariance coverage.
+* `--mode release` — strict. It additionally fails on any recorded exception or NOT RUN in the required areas,
+  and on a required area that has no checks at all.
+* `--mode submission` — submission readiness. It checks the contract artifacts: `output.csv`, the contents of
+  `code.zip` (README, entry point, both reports; no dataset, caches, nested archives or credential patterns), and
+  `log.txt` (every entry has exactly one populated `tool=` and `model=` line). Pass `--agent-trace PATH` to check
+  the separately kept trace zip. Running a model at runtime is not a contract requirement and is not checked.
+
+Recorded exceptions, each with a rationale and an exact case list, live in `code/evaluation/known_exceptions.json`.
+An exception documents uncertainty; it never establishes correctness. `code/evaluation/gate_tests.py` tests the
+gate itself. `reproduce.py --previous REV` also runs those self-tests against REV's gate, which gives fail-first
+evidence for the gate. Further material:
+
+* raw-evidence reviews of the unresolved cases and the organiser message draft: `code/evaluation/case_reviews.md`;
+* the case-level evidence matrix and conflict reproductions: `case_investigation.md`, written by
+  `code/evaluation/investigate_cases.py`;
+* the review packets with the owner's decisions: `docs/review_packets.md`;
+* a one-case walkthrough: `docs/walkthrough.md`;
+* the transcript audit: `docs/transcript_audit.md`, with counts reproducible by `scripts/transcript_audit.py`;
+* the engineering-ownership matrix: `docs/engineering_ownership.md`.
+
+CI (`.github/workflows/checks.yml`) runs the execution job, the full reproduction and the acceptance gates.
 
 The run manifest records the code revision, parser version, SHA-256 of every input CSV and evidence file,
 extraction failures, cache hits/misses, timings, validation results and model usage.
@@ -88,7 +106,9 @@ code/
     unit_tests.py            certification and investigation unit checks (runnable against any code tree)
     agent_eval.py            labelled evaluation of the investigation step vs the deterministic baseline
     investigate_cases.py     case-level evidence matrix and specification-conflict reproductions
-    acceptance.py            regression gate (--mode dev) and strict release gate (--mode release)
+    acceptance.py            regression (--mode dev), strict release (--mode release), submission readiness
+    test_registry.json       exact test identities and invariance coverage every run must produce
+    fingerprints.py          evaluation-code fingerprint (results go stale when it changes)
     gate_tests.py            self-tests of the acceptance gate
   prompts/intent_fallback.md
 ```

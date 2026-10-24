@@ -9,7 +9,7 @@ permissions:
 
 env:
   BASELINE_REV: f280a63
-  PREVIOUS_REV: a3633c9
+  PREVIOUS_REV: 62eb25d
 
 jobs:
   execute:

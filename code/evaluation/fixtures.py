@@ -441,10 +441,10 @@ COMMIT;
     # R14 a screen declares 3 records; the default OCR pass misses the small middle row. The screen's own
     # count is the independent label: all three retained records must be verified, citing the screen.
     add_file("fx_ev_39", "evidence/images/fx_row_gap.png", "fx_console", "2026-06-09T12:00:00Z", _png_rows([
-        ("Security events   Updated moments ago - 3 records", 28, (0, 0, 0)),
-        ("1  Password changed   user_9034   Valid   audit_record_9341", 28, (0, 0, 0)),
+        ("Security events   Updated moments ago - 3 records", 16, (0, 0, 0)),
+        ("1  Password changed   user_9034   Valid   audit_record_9341", 16, (0, 0, 0)),
         ("2  Session revoked   user_9034   Valid   audit_record_9342", 10, (90, 90, 90)),
-        ("3  Login new device   user_9034   Valid   audit_record_9343", 28, (0, 0, 0))]))
+        ("3  Login new device   user_9034   Valid   audit_record_9343", 16, (0, 0, 0))]))
     add_file("fx_ev_40", "evidence/logs/fx_row_gap_account.log", "fx_observability", "2026-06-09T12:00:00Z",
              "2026-06-09T09:40:00Z level=INFO service=account_service trace_id=tr-910090 resource_id=account_9234 "
              "event=profile_lookup_completed rows=0 http_status=404 correlation_key=\"uma.reyes@example.org\"\n")
@@ -566,7 +566,7 @@ def _png_rows(rows) -> bytes:
     d = ImageDraw.Draw(img)
     for i, (text, size, rgb) in enumerate(rows):
         font = None
-        for f in ("/usr/share/fonts/opentype/inter/Inter-Regular.otf", "DejaVuSans.ttf") if size < 20 else ("DejaVuSans.ttf",):
+        for f in ("/usr/share/fonts/opentype/inter/Inter-Regular.otf", "DejaVuSans.ttf") if size < 12 else ("DejaVuSans.ttf",):
             try:
                 font = ImageFont.truetype(f, size)
                 break

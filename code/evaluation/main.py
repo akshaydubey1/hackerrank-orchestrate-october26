@@ -773,12 +773,12 @@ def mutations():
         orig = inv._accept
 
         def acc(pb, text):
-            ok, new = orig(pb, text)
+            ok, new, why = orig(pb, text)
             if pb.kind == "row_gap" and not ok:
                 from ghost_audit.util import RESOURCE_RE
                 new = sorted({m.group(0) for m in RESOURCE_RE.finditer(text.lower())} - set(pb.known_ids))
-                return bool(new), new
-            return ok, new
+                return bool(new), new, "mutant"
+            return ok, new, why
         return patched(inv, "_accept", acc)
 
     return [("accept investigation hypothesis without verbatim read", m_unvalidated_investigation, False),
@@ -865,7 +865,11 @@ def environment() -> dict:
             return metadata.version(name)
         except metadata.PackageNotFoundError:
             return "not installed"
-    return {"code_fingerprint": code_fingerprint(CODE), "parser_version": parsers.PARSER_VERSION,
+    from ghost_audit.util import config_fingerprint, dataset_digest
+    from evaluation.fingerprints import evaluation_fingerprint
+    return {"code_fingerprint": code_fingerprint(CODE), "evaluation_fingerprint": evaluation_fingerprint(),
+            "dataset_digest": dataset_digest(DATASET), "config": config_fingerprint(),
+            "parser_version": parsers.PARSER_VERSION,
             "python": platform.python_version(), "sqlite": sqlite3.sqlite_version,
             "tesseract": tool(["tesseract", "--version"]), "pdftotext": tool(["pdftotext", "-v"]),
             "pypdf": pkg("pypdf"), "reportlab": pkg("reportlab"), "pillow": pkg("pillow"),
@@ -909,7 +913,7 @@ def main(argv=None):
     gold_nd = set(ver0.verify(read_requests(DATASET / "sample_deletion_requests.csv"), gold)["issues"]
                   .get("resource_not_discoverable_by_audit_at", []))
     tr = {r.case_id: r.trace for r in eng.last_results}
-    causes = []
+    causes, retrieval = [], []
     internal_s = {r.case_id: r.internal_status for r in eng.last_results}
     req_s = {q["case_id"]: q for q in read_requests(DATASET / "sample_deletion_requests.csv")}
     occ = ver0.occurrences()
@@ -944,7 +948,14 @@ def main(argv=None):
                 else:
                     cause = "other (see trace)"
             causes.append((c, t[3], rid, t[5], cause))
+            named = sorted({f for f, cap, rt, ctx in occ.get(rid, [])
+                            if cap <= cut and (rt is None or rt <= cut) and uid in ver0.users_named(ctx)})
+            retrieval.append({"case": c, "resource": rid, "operation": t[3], "admissible_files_naming_subject": named,
+                              "resource_in_prediction": any(p["resource_id"] == rid for p in pred[c][1]),
+                              "internal_status": internal_s.get(c)})
     res["sample_miss_causes"] = causes
+    res["sample_retrieval_check"] = retrieval
+    res["sample_missing_steps_total"] = sum(len(x["missing"]) for x in res["samples_cases"].values())
     full_pred, full_eng = run_engine(DATASET)
     ver = Verifier(DATASET, CODE / ".cache" / "verifier")
     lc = Counter()

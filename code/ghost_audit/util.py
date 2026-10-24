@@ -102,3 +102,27 @@ def code_fingerprint(code_dir) -> str:
         if p.is_file():
             h.update(p.relative_to(code_dir).as_posix().encode() + b"\0" + p.read_bytes() + b"\0")
     return h.hexdigest()
+
+
+def dataset_digest(dataset_dir) -> str:
+    """sha256 over every participant file (relative path + bytes), excluding the blank output template."""
+    from pathlib import Path
+    dataset_dir = Path(dataset_dir)
+    h = hashlib.sha256()
+    for p in sorted(x for x in dataset_dir.rglob("*") if x.is_file() and x.name != "output.csv"):
+        h.update(p.relative_to(dataset_dir).as_posix().encode() + b"\0" + p.read_bytes() + b"\0")
+    return h.hexdigest()
+
+
+CONFIG_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "GHOST_AUDIT_MODEL", "GHOST_AUDIT_INVESTIGATOR",
+               "GHOST_AUDIT_PRICE_IN", "GHOST_AUDIT_PRICE_OUT")
+
+
+def config_fingerprint() -> dict:
+    """Run-affecting configuration. Secrets and endpoints are recorded only as set/unset."""
+    import os
+    out = {}
+    for k in CONFIG_VARS:
+        v = os.environ.get(k)
+        out[k] = ("set" if v else "unset") if k in ("ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL") else (v or "default")
+    return out

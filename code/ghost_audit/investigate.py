@@ -46,7 +46,7 @@ ACTIONS = {
 LADDER = ["ocr_x2_psm6", "ocr_x3_psm6", "ocr_x2_psm4", "ocr_x3_psm11", "ocr_x2_bin_psm6"]
 MAX_ACTIONS_PER_PROBLEM = 3
 MAX_ACTIONS_PER_RUN = 60
-VERSION = "investigate-v2"
+VERSION = "investigate-v3"
 
 
 def _edit(a: str, b: str) -> int:
@@ -67,7 +67,8 @@ class Problem:
     hypothesis: str        # identifier_misread: the single known identifier; row_gap: declared count
     context: str           # the OCR line it was read on (the count line for row_gap)
     kind: str = "identifier_misread"
-    known_ids: list = field(default_factory=list)   # row_gap: resource ids already extracted
+    known_ids: list = field(default_factory=list)   # row_gap: the table's row ids already extracted
+    table_type: str = ""                             # row_gap: resource-id prefix of the table's rows
 
 
 @dataclass
@@ -112,37 +113,73 @@ def find_problems(store, known_emails: set) -> list:
     return sorted(out, key=lambda p: (p.file_id, p.observed))
 
 
-COUNT_RE = re.compile(r"\b(\d{1,3})\s+records?\b")
+COUNT_RE = re.compile(r"\b(\d{1,4})\s+records?\b")
+PAGINATION_RE = re.compile(r"\b(showing|page \d+|of \d+ records?|next page|previous page)\b|\d+\s*[-\u2013]\s*\d+\s+of\s+\d+")
+OWNER_RE = re.compile(r"\buser_\d+\b|[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}|\b[0-9a-f]{64}\b")
+
+
+def _prefix(rid: str) -> str:
+    return rid.rsplit("_", 1)[0]
+
+
+def _table_ids(low: str, table_type: str) -> set:
+    from .util import RESOURCE_RE
+    return {m.group(0) for m in RESOURCE_RE.finditer(low) if _prefix(m.group(0)) == table_type}
 
 
 def find_row_gaps(store) -> list:
-    """Screens that declare N records but yield fewer distinct row resource ids than N."""
+    """Screens whose single, non-paginated record count exceeds the distinct row ids of the table's type.
+
+    The count is bound to one table: a page with several distinct counts (several tables) or with
+    pagination wording ("showing 1-25 of 132", "page 2") is skipped, because the count would not describe
+    the rows on screen. Only ids of the table's resource type are counted, so ids of other types on the
+    page (detail panels, navigation) cannot fill the count. Duplicates (a row repeated in a detail
+    panel) count once."""
     from .util import RESOURCE_RE
     out = []
     for fid, ef in store.files.items():
         if ef.path.suffix.lower() not in (".png", ".jpg", ".jpeg") or not ef.text:
             continue
         low = ef.text.lower()
-        counts = [(int(m.group(1)), m.group(0)) for m in COUNT_RE.finditer(low)]
-        if not counts:
+        counts = {int(m.group(1)) for m in COUNT_RE.finditer(low)}
+        if len(counts) != 1 or PAGINATION_RE.search(low):
             continue
-        declared, line = max(counts)
-        ids = sorted({m.group(0) for m in RESOURCE_RE.finditer(low)})
+        declared = counts.pop()
+        prefixes = {}
+        for m in RESOURCE_RE.finditer(low):
+            prefixes.setdefault(_prefix(m.group(0)), set()).add(m.group(0))
+        if not prefixes:
+            continue
+        table_type, ids = max(prefixes.items(), key=lambda kv: (len(kv[1]), kv[0]))
         if 0 < len(ids) < declared:
-            out.append(Problem(fid, str(ef.path), f"{len(ids)} row ids", str(declared), line, kind="row_gap",
-                               known_ids=ids))
+            line = next((ln.strip() for ln in low.splitlines() if COUNT_RE.search(ln)), "")
+            out.append(Problem(fid, str(ef.path), f"{len(ids)} {table_type} row ids", str(declared), line[:160],
+                               kind="row_gap", known_ids=sorted(ids), table_type=table_type))
     return out
 
 
 def _accept(pb: Problem, text: str) -> tuple:
-    """Deterministic validation. Returns (accepted, new_ids)."""
-    if pb.kind == "row_gap":
-        from .util import RESOURCE_RE
-        found = {m.group(0) for m in RESOURCE_RE.finditer(text.lower())}
-        new = sorted(found - set(pb.known_ids))
-        # accept only a re-read that completes the screen's own declared count exactly
-        return bool(new) and len(set(pb.known_ids) | set(new)) == int(pb.hypothesis), new
-    return verbatim(pb.hypothesis, text), []
+    """Deterministic validation. Returns (accepted, new_ids, reason)."""
+    if pb.kind != "row_gap":
+        ok = verbatim(pb.hypothesis, text)
+        return ok, [], "verbatim" if ok else "hypothesis not read verbatim"
+    low = text.lower()
+    declared = int(pb.hypothesis)
+    counts = {int(m.group(1)) for m in COUNT_RE.finditer(low)}
+    if counts != {declared}:
+        return False, [], f"count not confirmed by the re-read ({sorted(counts) or 'none'})"
+    ids = _table_ids(low, pb.table_type)
+    dropped = sorted(set(pb.known_ids) - ids)
+    if dropped:
+        return False, [], f"re-read drops original rows {dropped[:3]} (cannot be reconciled with the first reading)"
+    new = sorted(ids - set(pb.known_ids))
+    if not new or len(ids) != declared:
+        return False, [], f"{len(ids)} {pb.table_type} ids read, {declared} declared"
+    lines = low.splitlines()
+    ungrounded = [r for r in new if not any(r in ln and OWNER_RE.search(ln.replace(r, "")) for ln in lines)]
+    if ungrounded:
+        return False, [], f"recovered rows without an owner identifier on their own line: {ungrounded}"
+    return True, new, "declared count completed by a complete re-read"
 
 
 def _reextract(path: str, action: str, cache_dir: Path | None) -> tuple:
@@ -238,9 +275,9 @@ def investigate(problems: list, policy, cache_dir: Path | None = None,
                 break
             text, cached = _reextract(pb.path, action, cache_dir)
             spent += 0 if cached else 1
-            ok, new = _accept(pb, text)
+            ok, new, why = _accept(pb, text)
             tried.append(action)
-            oc.attempts.append({"action": action, "verbatim": ok, "cached": cached, "new_ids": new})
+            oc.attempts.append({"action": action, "verbatim": ok, "cached": cached, "new_ids": new, "reason": why})
             if ok:
                 oc.verified = True
                 oc.new_ids = new

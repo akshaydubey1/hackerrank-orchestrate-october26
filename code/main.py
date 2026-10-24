@@ -23,7 +23,7 @@ sys.path.insert(0, str(HERE))
 from ghost_audit import parsers  # noqa: E402
 from ghost_audit.llm import USAGE  # noqa: E402
 from ghost_audit.pipeline import Engine, read_requests, write_output  # noqa: E402
-from ghost_audit.util import code_fingerprint, sha256_file  # noqa: E402
+from ghost_audit.util import code_fingerprint, config_fingerprint, dataset_digest, sha256_file  # noqa: E402
 
 
 def repo_root() -> Path:
@@ -76,6 +76,8 @@ def main(argv=None) -> int:
     manifest = {
         "code_revision": git_revision(root),
         "code_fingerprint": code_fingerprint(HERE),
+        "dataset_digest": dataset_digest(dataset),
+        "config": config_fingerprint(),
         "parser_version": parsers.PARSER_VERSION,
         "requests_file": str(req_path.relative_to(root)) if req_path.is_relative_to(root) else str(req_path),
         "requests_sha256": sha256_file(req_path),

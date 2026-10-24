@@ -195,6 +195,6 @@
   },
   "transcript": {
     "status": "EXCEPTION",
-    "rationale": "agent-trace.zip holds this session's JSONL after a context compaction; turns before the compaction are summarised at its start, not present verbatim. log.txt has an entry for every turn; entries written after the fact are marked '(recorded late)'. /export was not available in this harness."
+    "rationale": "No raw session record survives for 13:09-17:35 UTC: the harness rewrites the session JSONL at each compaction. agent-trace.zip holds the export for 17:35-22:38 and the live file from 22:43. The audit (docs/transcript_audit.md) found 16 human messages; 4 were missing or only summarised in log.txt, and labelled corrections have been appended. The final turn is truncated in any in-session copy; only the owner's claude.ai account export covers the whole session."
   }
 }

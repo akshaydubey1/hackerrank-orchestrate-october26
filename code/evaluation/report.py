@@ -93,6 +93,9 @@ def render(res: dict, eng) -> str:
          "## 0. Run identity", "",
          "| Item | Value |", "|---|---|",
          f"| Code fingerprint (sha256 of `ghost_audit/*.py`, `main.py`, `prompts/*`, `requirements.txt`) | `{env.get('code_fingerprint', '?')}` |",
+         f"| Evaluation-code fingerprint (`evaluation/*.py` except the gate, plus `known_exceptions.json`, `test_registry.json`) | `{env.get('evaluation_fingerprint', '?')}` |",
+         f"| Evidence-content digest (sha256 over every dataset file, path + bytes, except `output.csv`) | `{env.get('dataset_digest', '?')}` |",
+         "| Configuration (secrets and endpoints recorded only as set / unset) | " + ", ".join(f"`{k}`={v}" for k, v in (env.get('config') or {}).items()) + " |",
          f"| Parser / cache version | `{env.get('parser_version', '?')}` |",
          f"| Python / SQLite | {env.get('python', '?')} / {env.get('sqlite', '?')} |",
          f"| OCR / PDF tools | {env.get('tesseract', '?')}; {env.get('pdftotext', '?')} |",
@@ -183,6 +186,7 @@ def render(res: dict, eng) -> str:
           "| Case | Behaviour checked | Result | Detail |", "|---|---|---|---|"]
     for name, ok, detail in fx:
         L.append(f"| `{name}` | {FIXTURE_MODES.get(name, '')} | {_yes(ok)} | {detail} |")
+    from collections import Counter
     ff = res.get("failfirst")
     L += ["", "### Fail-first evidence", ""]
     if ff:
@@ -203,6 +207,18 @@ def render(res: dict, eng) -> str:
                                                                 + (f", {x['n_steps']} steps)" if x.get("status") != "unit" else ")")))
                 L.append(f"| `{c}` | {FAILFIRST_DEFECT.get(c, FIXTURE_MODES.get(c, ''))} | " + " | ".join(cells)
                          + f" | {'PASS' if n[c]['pass'] else '**FAIL**'} |")
+        L.append("")
+        n_fx = sum(1 for k in n if not k.startswith("U"))
+        n_u = sum(1 for k in n if k.startswith("U"))
+        L += [f"**Accounting.** The fail-first set is {n_fx} case fixtures + {n_u} unit tests = {len(n)} tests. Section 3 lists "
+              f"{len(fx)} fixtures: the extra one, `fx_extraction_failures_recorded`, checks the run's extraction-failure record "
+              "rather than a case output, so it cannot be replayed against an old tree. (The previous pass reported 54 = 43 + 11; "
+              "unit tests U12–U20 for row recovery were added in this pass.)", ""]
+        for t in tags:
+            kinds = Counter((v.get("kind", "behaviour"), bool(v.get("pass"))) for v in ff[t].values())
+            L.append(f"* {ff[t + '_rev']}: {kinds[('behaviour', False)]} behavioural failures, "
+                     f"{kinds[('harness-incompatible', False)]} harness-incompatible (the module or function a test calls does "
+                     f"not exist in that tree, so it shows no behaviour), {kinds[('behaviour', True)] + kinds[('harness-incompatible', True)]} pass.")
         L.append("")
         L.append("Tests that pass on every tree (e.g. `fx_ocr_nearmiss`, `fx_embedded_future`, `fx_injection`, "
                  "`fx_backup_row_restorable`) guard against reintroducing a defect; they are not proof of a fix.")
@@ -365,6 +381,19 @@ def render(res: dict, eng) -> str:
           "* `cited_without_subject_identifier` counts cited steps whose record context does not itself print "
           "the subject (e.g. a 404 account lookup or an anonymised analytics row); those links come from "
           "evidence-linked workflow correlation and are the weakest links in the output.", ""]
+    st = ve["stats"]
+    rejected = {k: len(ve["issues"].get(k, [])) for k in ("unknown_evidence", "absence_from_partial_capture",
+                                                           "citation_does_not_mention_resource", "state_not_supported_by_citation")}
+    L += ["### Citation reconciliation (518 predictions)", "",
+          "| Count | Steps |", "|---|---|",
+          f"| Cited steps (non-empty evidence_id) | {st.get('cited_steps', 0)} |",
+          f"| = context supports the claimed state | {st.get('supported_cited_steps', 0)} |",
+          f"| + absence proven by a complete capture (no record line exists to quote) | {st.get('absence_by_capture', 0)} |",
+          "| + rejected: " + ", ".join(f"{k} {v}" for k, v in rejected.items()) + f" | {sum(rejected.values())} |",
+          f"| Check: supported + capture + rejected = cited | {st.get('supported_cited_steps', 0) + st.get('absence_by_capture', 0) + sum(rejected.values())} "
+          f"{'=' if st.get('supported_cited_steps', 0) + st.get('absence_by_capture', 0) + sum(rejected.values()) == st.get('cited_steps', 0) else '**≠**'} {st.get('cited_steps', 0)} |",
+          f"| Subset, not an extra category: cited steps whose context does not print the subject | {st.get('cited_without_subject_identifier', 0)} |",
+          f"| Unresolved (uncertified) rows, no citations by design | {len(ve['issues'].get('incomplete_without_findings', []))} rows |", ""]
 
     # ---------------------------------------------------------------- output contract
     ct = res.get("contract", {})
