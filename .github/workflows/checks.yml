@@ -1,0 +1,112 @@
+name: checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  BASELINE_REV: f280a63
+  PREVIOUS_REV: 62eb25d
+
+jobs:
+  execute:
+    name: execution (fresh prediction, committed output reproduced)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr poppler-utils
+      - run: python -m pip install -r code/requirements.txt
+      - name: Predict all 518 requests with fresh extraction
+        run: python code/main.py --no-cache --out /tmp/output.csv --trace-dir /tmp/runs
+      - name: Committed output.csv equals the fresh prediction
+        run: cmp output.csv /tmp/output.csv
+
+  evaluate:
+    name: full evaluation (regression, metamorphic, operational, mutation, invariance, verifier, fail-first)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # baseline revisions for the before/after and fail-first runs
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr poppler-utils
+      - run: python -m pip install -r code/requirements.txt
+      - name: Reproduce everything (invariance, comparisons, fail-first, full suite, reports, acceptance)
+        run: python code/evaluation/reproduce.py --baseline "$BASELINE_REV" --previous "$PREVIOUS_REV"
+      - name: Regenerated output.csv equals the committed one
+        run: git diff --exit-code -- output.csv
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: evaluation
+          path: |
+            code/runs/evaluation_results.json
+            code/runs/invariance/invariance.json
+            code/runs/compare_*.json
+            code/runs/failfirst/*.json
+            code/runs/invariance/traces/full.manifest.json
+            code/runs/gate_tests.json
+            code/evaluation/evaluation_report.md
+            code/evaluation/acceptance_report.md
+            code/evaluation/case_investigation.md
+            code/evaluation/usage_report.md
+
+  regression-gate:
+    name: regression gate (dev mode; fails on unexpected change, stale or incomplete results)
+    needs: evaluate
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r code/requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: evaluation
+          path: artifact
+      # upload-artifact strips the common prefix "code/" from the uploaded paths
+      - name: Regression gate
+        run: |
+          python code/evaluation/acceptance.py --mode dev \
+            --results artifact/runs/evaluation_results.json \
+            --invariance artifact/runs/invariance/invariance.json \
+            --gate-tests artifact/runs/gate_tests.json
+
+  release-gate:
+    name: release gate (strict; BLOCKED while semantic exceptions or missing evaluations remain)
+    needs: evaluate
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r code/requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: evaluation
+          path: artifact
+      - name: Release gate (expected to fail until every blocker is resolved)
+        run: |
+          if python code/evaluation/acceptance.py --mode release \
+            --results artifact/runs/evaluation_results.json \
+            --invariance artifact/runs/invariance/invariance.json \
+            --gate-tests artifact/runs/gate_tests.json; then
+            echo "Release (strict): APPROVED"
+          else
+            echo "::error title=Release BLOCKED::Strict release gate is BLOCKED (recorded semantic exceptions or missing evaluations); this job fails by design and is not a passing release. See the job summary."
+            exit 1
+          fi

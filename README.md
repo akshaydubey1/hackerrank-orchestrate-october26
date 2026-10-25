@@ -1,5 +1,18 @@
 # HackerRank Orchestrate - October 2026
 
+> **Submission — how to run this solution** (author and maintainer: Akshay Awadh Dubey; details, architecture,
+> tradeoffs and known limitations: [`code/README.md`](./code/README.md))
+>
+> ```bash
+> # Python 3.10+, plus tesseract and pdftotext on PATH
+> python3 -m pip install -r code/requirements.txt
+> python3 code/main.py --no-cache      # writes ./output.csv (518 rows) from ./dataset
+> python3 code/evaluation/main.py      # regenerates code/evaluation/evaluation_report.md
+> python3 code/evaluation/make_usage_report.py   # regenerates code/evaluation/usage_report.md
+> ```
+> No API key needed; the pipeline is deterministic and made no model calls. Reports:
+> `code/evaluation/evaluation_report.md`, `code/evaluation/usage_report.md`.
+
 ## Ghost Data Still Exists
 
 Build an AI agent that audits whether a user's personal data was actually deleted.
