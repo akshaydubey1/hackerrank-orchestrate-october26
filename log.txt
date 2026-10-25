@@ -1138,3 +1138,22 @@ branch=feature/correctness-repair
 repo_root=/home/claude/hackerrank-orchestrate-october26
 worktree=main
 parent_agent=none
+
+## [2026-10-25T00:16:20Z] Owner decision: submit the current package with documented limitations
+
+User Prompt (verbatim, secrets redacted):
+I choose to submit the current verified package with the documented limitations. This is a competition-submission decision, not approval of semantic correctness. Keep release BLOCKED, preserve the 71 uncertified cases and transcript gaps, and do not change predictions or reports to imply otherwise. I will upload the artifacts myself. Confirm the exact final files and checksums, and log this decision accurately.
+
+Agent Response Summary:
+Recorded the owner's decision as given, at 2026-10-25T00:16:20Z. It is a competition-submission decision, not approval of semantic correctness. It supersedes the earlier "Decide later" answer from 2026-10-24T23:00:50Z, which is left unchanged. Release stays BLOCKED, and the 71 uncertified cases and the transcript gaps stay documented. No prediction, report or package file was changed: code.zip, output.csv and agent-trace.zip are byte-identical to the artifacts delivered for commit 97a87c7. Only this log.txt entry was added. The owner uploads the artifacts; the agent submits nothing.
+
+Actions:
+* appended this entry to log.txt; sha256sum of the final files; commit and push of log.txt only
+
+Context:
+tool=Claude (claude.ai app agent workspace)
+model=claude-opus-5-5
+branch=feature/correctness-repair
+repo_root=/home/claude/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none
