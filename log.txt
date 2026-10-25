@@ -1157,3 +1157,22 @@ branch=feature/correctness-repair
 repo_root=/home/claude/hackerrank-orchestrate-october26
 worktree=main
 parent_agent=none
+
+## [2026-10-25T00:27:00Z] Interview preparation guide
+
+User Prompt (verbatim, secrets redacted):
+Now give me all the information about it, to prepare for interview with .md file . Make sure its very detailed and woudl have grill to interview.
+
+Agent Response Summary:
+Wrote an interview-preparation guide as a Markdown file, kept outside the repository and outside code.zip. It covers the pitch, architecture, the seven decision stages, the case_37 walkthrough, a numbers cheat sheet, the iteration history, the evaluation methods, the owner's recorded decisions, the limitations, and hard interview questions with answers. All figures come from the repository's reports. The suggested reasons for the owner's decisions are marked as suggestions for him to adopt or replace, not as reasons he gave. No code, prediction, report or package file changed.
+
+Actions:
+* wrote /home/claude/interview_prep_ghost_data.md (outside the repository)
+
+Context:
+tool=Claude (claude.ai app agent workspace)
+model=claude-opus-5-5
+branch=feature/correctness-repair
+repo_root=/home/claude/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none
