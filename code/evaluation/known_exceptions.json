@@ -195,6 +195,6 @@
   },
   "transcript": {
     "status": "EXCEPTION",
-    "rationale": "No raw session record survives for 13:09-17:35 UTC: the harness rewrites the session JSONL at each compaction. agent-trace.zip holds the export for 17:35-22:38 and the live file from 22:43. The audit (docs/transcript_audit.md) found 16 human messages; 4 were missing or only summarised in log.txt, and labelled corrections have been appended. The final turn is truncated in any in-session copy; only the owner's claude.ai account export covers the whole session."
+    "rationale": "No raw session record survives for 13:09-17:35 UTC: the harness rewrites the session JSONL at each compaction. agent-trace.zip holds the export for 17:35-22:38 and the live file from 22:43. The audit (docs/transcript_audit.md) found 16 human messages; 4 were missing or only summarised in log.txt, and labelled corrections have been appended. The final turn is truncated in any in-session copy; the owner's claude.ai account export may cover the whole session, but its coverage is UNVERIFIED until the export itself is inspected; until then these gaps stand."
   }
 }

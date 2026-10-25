@@ -1105,3 +1105,36 @@ branch=feature/correctness-repair
 repo_root=/home/claude/hackerrank-orchestrate-october26
 worktree=main
 parent_agent=none
+
+## [2026-10-25T00:05:00Z] Close the pass: verdict wording, retrieval scope, packaging, CI visibility
+
+User Prompt (verbatim, secrets redacted):
+Close this pass without expanding scope.
+
+Keep development PASS and release BLOCKED. Rename “submission READY” to “submission package ready; semantic correctness unresolved,” unless any required artifact is still missing.
+
+Before delivering:
+1. Give me the final standalone log.txt, code.zip, output.csv, and supplementary agent-trace.zip, with full SHA-256 checksums and the tested commit.
+2. Confirm the packaged Markdown reports contain the substantive evaluation results and limitations. If docs/transcript_audit.md, engineering_ownership.md, walkthrough.md, or review_packets.md are outside code.zip, identify that explicitly and include relevant supporting documentation where appropriate.
+3. State the precise scope and denominator behind “retrieval omissions: 0”; do not equate this check with exhaustive evidence discovery.
+4. Treat account-export coverage as unverified until the actual export is inspected. Preserve the documented trace gaps meanwhile.
+5. Confirm CI’s expected release failure is visibly reported as BLOCKED, not represented as a passing release.
+6. Preserve my actual decisions and their original wording. Any explanation I provide now must be logged as a new, dated explanation—not retroactively attributed to an earlier answer.
+
+Do not modify predictions merely to improve presentation. Do not submit to HackerRank yet. Return the final artifact checklist and any remaining action required from me.
+
+Agent Response Summary:
+The submission verdict now reads "PACKAGE READY; semantic correctness unresolved"; development stays PASS and release stays BLOCKED. The four docs were outside code.zip; code.zip now also contains docs/ and scripts/. The retrieval check's detail now states its scope: 0 omissions among the 24 of 35 missed public-sample steps whose resource is absent from the prediction, searched by user_id or e-mail in the verifier's own extraction. It is not exhaustive discovery and does not cover the 518 cases. Account-export coverage is marked UNVERIFIED and the trace gaps stand. The CI release job now emits an error annotation "Release BLOCKED" and still fails. Decisions now quote the owner's selected labels verbatim. The agent's own wording in an earlier question premise is corrected as a dated note. This message gives no new explanation of earlier decisions, so none is attributed. Predictions are unchanged (output.csv sha256 c6cc2f64…).
+
+Actions:
+* edited code/evaluation/acceptance.py (verdict label, retrieval scope text), known_exceptions.json (export coverage unverified), .github/workflows/checks.yml (BLOCKED annotation), docs/{transcript_audit,walkthrough,review_packets}.md, code/README.md (packaging command)
+* python3 code/evaluation/main.py; make_usage_report.py; gate_tests.py; acceptance.py --mode dev|release|submission
+* rebuilt code.zip with docs/ and scripts/; clean-room run reproduced output.csv; commit and push to the fork
+
+Context:
+tool=Claude (claude.ai app agent workspace)
+model=claude-opus-5-5
+branch=feature/correctness-repair
+repo_root=/home/claude/hackerrank-orchestrate-october26
+worktree=main
+parent_agent=none

@@ -38,7 +38,7 @@ only after it is made.
 * **Acceptance criterion.** Under any approach: 0 of 2,097 batch-invariance changes, no case attributes an
   account owned by another subject (verifier `context_names_other_subject` = 0), and every certified account
   claim cites admissible evidence.
-* **Decision (2026-10-24T22:46:37Z, repository owner, via the in-app question):** Keep strict (no account attributed; the 27 all-absent cases stay uncertified). This was the option the agent recommended; the owner selected it. No implementation change follows.
+* **Decision (2026-10-24T22:46:37Z, repository owner, via the in-app question):** selected "Keep strict (Recommended)". Effect, as described by the agent: no account is attributed, and the 27 all-absent cases stay uncertified. This was the option the agent recommended; the owner selected it. No implementation change follows.
 
 ---
 
@@ -65,7 +65,7 @@ only after it is made.
 * **Recommendation.** Keep A pending organiser question 1; B is a contained option if confirmed.
 * **Acceptance criterion.** Any change must keep the metamorphic tests "add evidence captured after every
   audit_at" and "add activity dated after each audit_at" at 0 changed cases, and change no status.
-* **Decision (2026-10-24T22:46:37Z, repository owner, via the in-app question):** Strict capture time (files captured after audit_at are not used). This was the option the agent recommended; the owner selected it. No implementation change follows.
+* **Decision (2026-10-24T22:46:37Z, repository owner, via the in-app question):** selected "Strict capture time (Recommended)". Effect, as described by the agent: files captured after audit_at are not used. This was the option the agent recommended; the owner selected it. No implementation change follows.
 
 ---
 
@@ -93,9 +93,11 @@ only after it is made.
 * **Recommendation.** Keep A pending organiser question 2.
 * **Acceptance criterion.** Whatever the serialisation, the internal UNCERTIFIED state and its reasons stay in
   the trace and in `known_exceptions.json`, and the release gate stays BLOCKED while any exist.
-* **Decision (2026-10-24T22:46:37Z, repository owner, via the in-app question):** INCOMPLETE with future checks only (current serialisation). This was the option the agent recommended; the owner selected it. No implementation change follows.
+* **Decision (2026-10-24T22:46:37Z, repository owner, via the in-app question):** selected "INCOMPLETE, future checks (Recommended)". Effect, as described by the agent: the current serialisation is kept. This was the option the agent recommended; the owner selected it. No implementation change follows.
 
 ---
 
-Organiser clarification message: the owner chose to send it personally (2026-10-24T22:46:37Z); the agent keeps it as a draft
+Organiser clarification message: the owner selected "I'll send it myself" (2026-10-24T22:46:37Z); the agent keeps it as a draft
 in `code/evaluation/case_reviews.md` and has not sent it.
+
+No explanation of these decisions was given by the owner; none is attributed. (Note added 2026-10-24T23:59:44Z.)

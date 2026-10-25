@@ -19,8 +19,7 @@ The script prints only counts, timestamps and redacted first lines; raw traces a
 | `/mnt/user-data/attachments/9b2789ab-…/*-attachment.txt` (8 files) | file mtimes 13:09, 13:19, 17:35, 19:41, 20:22, 20:37, 21:43, 22:43 | the prompts the person attached, byte for byte |
 
 **No raw session record survives for 13:09:48 → 17:35:19 (4 h 25 min).** For that window `log.txt`
-and two attachment files are the only evidence. The agent cannot recover it; only an account-level export
-can (§5).
+and two attachment files are the only evidence. The agent cannot recover it. An account-level export might (§5); that is unverified.
 
 ## 2. Record classes (agent-trace.zip, 2,321 records)
 
@@ -89,6 +88,8 @@ Interrupts (person actions without text): 18:02:12 (a tool use rejected), 19:41:
   turn. It holds the earlier export (17:35 → 22:38) and the live file (22:43 → the time of packaging), with
   the account e-mail redacted. It still lacks 13:09 → 17:35 and the remainder of the final turn.
 * **The one action only the person can take:** after this turn finishes, request the claude.ai account
-  data export (in claude.ai Settings, under Privacy). Then submit, as the transcript, the conversation for
-  session 9b2789ab-1b74-50b7-9857-9b193fbc75ff from that export together with `log.txt`. That export is the
-  only source that covers the whole session, including the final turn.
+  data export (in claude.ai Settings, under Privacy) and locate session 9b2789ab-1b74-50b7-9857-9b193fbc75ff.
+* **Coverage of that export is UNVERIFIED.** Nobody has inspected an actual export. Whether it holds
+  13:09 → 17:35 UTC, the in-app answers and the complete final turn is not known. Until an export is inspected
+  and reconciled with this table, the gaps above stand. The denominators in §4 stay as stated (10 of 16
+  messages raw-backed), and `known_exceptions.json` keeps transcript completeness as an EXCEPTION.

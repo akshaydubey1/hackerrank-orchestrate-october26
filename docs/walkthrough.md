@@ -23,11 +23,15 @@ by evidence_03.
 
 ## Questions put to the owner and the actual answers (2026-10-24T23:00:50Z, in-app question)
 
-| Question | Answer selected by the owner |
+Question text exactly as asked; option labels exactly as selected:
+
+| Question (verbatim) | Owner's selection (verbatim) |
 |---|---|
-| The release gate stays BLOCKED (71 uncertified cases, recorded exceptions). How should the submission be treated? | **Decide later** (no decision recorded) |
-| Will you take the claude.ai account data export after this turn and submit it with `log.txt`? | **Yes, I'll export it** |
-| Disable flows / block restores before any record change, everywhere (as in case_37)? | **Yes, flows first always** (the current rule; no code change) |
+| "The release gate will stay BLOCKED. The 71 uncertified cases are documented exceptions, and you chose to keep them strict. Development and structure checks pass. How do you want this submission treated?" | "Decide later" |
+| "Only an account-level claude.ai data export covers 13:09–17:35 UTC and the end of this final turn. Will you take that export after this turn and submit it alongside log.txt?" | "Yes, I'll export it" |
+| "In case_37 the remediation disables data_flow_2528 before deleting search_1934, because activity_3755 shows that flow repopulated the index after the request. Is this the ordering rule you want applied everywhere?" | "Yes, flows first always" |
+
+Correction (2026-10-24T23:59:44Z): the agent wrote the second question's premise ("Only an account-level … export covers …") before any export had been inspected. Its coverage is unverified (`docs/transcript_audit.md` §5). The owner's answer is recorded as given.
 
 The ordering question offered the current rule and an alternative; the owner chose the current rule. The
 other two answers are the owner's own plans; the agent can act on neither.

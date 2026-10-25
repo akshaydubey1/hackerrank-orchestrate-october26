@@ -68,6 +68,15 @@ evidence for the gate. Further material:
 * the transcript audit: `docs/transcript_audit.md`, with counts reproducible by `scripts/transcript_audit.py`;
 * the engineering-ownership matrix: `docs/engineering_ownership.md`.
 
+`code.zip` is built from the repository root with the supporting documents included, and without run
+outputs or caches:
+
+```bash
+zip -r code.zip README.md code docs scripts -x "*/__pycache__/*" "*/.DS_Store" "code/runs/*" "code/.cache/*"
+```
+
+`agent-trace.zip` is supplementary. It is kept outside the repository and outside `code.zip`.
+
 CI (`.github/workflows/checks.yml`) runs the execution job, the full reproduction and the acceptance gates.
 
 The run manifest records the code revision, parser version, SHA-256 of every input CSV and evidence file,

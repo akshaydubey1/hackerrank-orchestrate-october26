@@ -101,7 +101,12 @@ jobs:
           path: artifact
       - name: Release gate (expected to fail until every blocker is resolved)
         run: |
-          python code/evaluation/acceptance.py --mode release \
+          if python code/evaluation/acceptance.py --mode release \
             --results artifact/runs/evaluation_results.json \
             --invariance artifact/runs/invariance/invariance.json \
-            --gate-tests artifact/runs/gate_tests.json
+            --gate-tests artifact/runs/gate_tests.json; then
+            echo "Release (strict): APPROVED"
+          else
+            echo "::error title=Release BLOCKED::Strict release gate is BLOCKED (recorded semantic exceptions or missing evaluations); this job fails by design and is not a passing release. See the job summary."
+            exit 1
+          fi
